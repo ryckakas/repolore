@@ -116,8 +116,7 @@ def create_server(paths: AppPaths, db_name: str, embedder_for: Callable[[str], E
 
     @server.tool(annotations=REFRESHES)
     def refresh() -> Refresh:
-        """Fetch what changed on GitHub and rebuild the index, in the background: a minute or two when it was refreshed
-        recently, up to an hour the first time. Search keeps working meanwhile; list_repos shows how it went."""
+        """Update the index from GitHub in the background, in minutes or an hour the first time; see list_repos."""
         if start_refresh(paths.data_dir, db_name):
             return Refresh(started=True, message="Refresh started in the background.")
         return Refresh(started=False, message="A refresh is already running; list_repos shows how it goes.")
