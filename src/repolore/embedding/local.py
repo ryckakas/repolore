@@ -33,6 +33,11 @@ class LocalModel:
     def model_id(self) -> str:
         return f"{self.name}@{self.revision[:12]}"
 
+    @property
+    def max_tokens(self) -> int:
+        # Room for the document prompt (7 tokens for voyage-4-nano) and special tokens (2 for bge-small).
+        return self.max_seq_length - PROMPT_MARGIN
+
 
 VOYAGE_NANO = LocalModel(
     name="voyageai/voyage-4-nano",
@@ -88,8 +93,7 @@ class LocalEmbedder:
 
     @property
     def max_tokens(self) -> int:
-        # Room for the document prompt (7 tokens for voyage-4-nano) and special tokens (2 for bge-small).
-        return self._spec.max_seq_length - PROMPT_MARGIN
+        return self._spec.max_tokens
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
         batch = list(texts)

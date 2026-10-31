@@ -6,9 +6,9 @@ from typing import Self
 
 import numpy as np
 
-from repolore.chunking import Chunk
+from repolore.chunking import Chunk, chunk_limit
 from repolore.embedding import Embedder, Vectors
-from repolore.embedding.local import ModelName, model_named_in
+from repolore.embedding.local import MODELS, ModelName, model_named_in
 from repolore.store import EmbeddingCache, cache_key, write_index
 
 TOKEN_BUDGET = 16_384
@@ -28,11 +28,14 @@ class BuildSettings:
     @classmethod
     def recorded(cls, meta: Mapping[str, str]) -> Self:
         """The settings an index was built with; anything it doesn't record keeps the default."""
-        max_tokens = meta.get("max_tokens", WHOLE)
+        model = model_named_in(meta.get("model_id", "")) or cls.model
+        limit = meta.get("max_tokens", WHOLE)
+        # The default limit is recorded as a number but read back as the default, so it follows a new model.
+        default = limit == WHOLE or int(limit) == chunk_limit(None, MODELS[model].max_tokens)
         return cls(
-            max_tokens=None if max_tokens == WHOLE else int(max_tokens),
+            max_tokens=None if default else int(limit),
             bot_reviews=meta.get("bot_reviews") == INCLUDED,
-            model=model_named_in(meta.get("model_id", "")) or cls.model,
+            model=model,
         )
 
     def overridden(
@@ -46,12 +49,17 @@ class BuildSettings:
             model=model or self.model,
         )
 
-    def meta(self) -> dict[str, str]:
-        return {"max_tokens": str(self.max_tokens or WHOLE), "bot_reviews": INCLUDED if self.bot_reviews else EXCLUDED}
+    def meta(self, limit: int) -> dict[str, str]:
+        """What to record, with the limit the chunker applies rather than the option, which can name the same one."""
+        return {"max_tokens": str(limit), "bot_reviews": self._bot_reviews}
 
-    def __str__(self) -> str:
-        sections = f"sections split at {self.max_tokens} tokens" if self.max_tokens else "whole sections"
-        return f"{sections}, bot reviews {INCLUDED if self.bot_reviews else EXCLUDED}, {self.model}"
+    def described(self, limit: int) -> str:
+        default = " (the default)" if self.max_tokens is None else ""
+        return f"sections split at {limit} tokens{default}, bot reviews {self._bot_reviews}, {self.model}"
+
+    @property
+    def _bot_reviews(self) -> str:
+        return INCLUDED if self.bot_reviews else EXCLUDED
 
 
 @dataclass(frozen=True)
