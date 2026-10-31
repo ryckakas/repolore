@@ -82,8 +82,9 @@ with the sources expected to answer it. [EXPERIMENTS.md](EXPERIMENTS.md) has the
   words rather than the exact identifiers. Fusing the two rankings and reranking with a cross-encoder both gave
   gains within the noise and moved some first-place hits down.
 - **Bigger chunks were better.** One chunk per markdown section, never split, beat 800, 400 and 200-token caps.
-  Every section in that corpus fit the embedding model's 32K tokens. On larger ones, the few sections that don't
-  are cut off and slow the first build down ([#17](https://github.com/ryckakas/repolore/issues/17)).
+  No section in that corpus came near 8,192 tokens, which is now the most a chunk holds by default: on larger
+  corpora, the few longer sections were slow to embed and were cut off at the model's 32K-token window
+  ([#17](https://github.com/ryckakas/repolore/issues/17)), so they are now split instead.
 - **The model matters most.** `bge-small` (33M parameters) lost a third of the first-place hits compared with
   `voyage-4-nano` (340M), the default.
 - **Less can be more.** Indexing every commit instead of only those without a PR lowered MRR: the commits restate

@@ -1,9 +1,14 @@
 import sys
 import types
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
 import pytest
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
 
 from repolore.embedding import local
 from repolore.embedding.local import LocalEmbedder, UnknownModelError, embedder_for
@@ -11,6 +16,7 @@ from repolore.embedding.local import LocalEmbedder, UnknownModelError, embedder_
 
 class StubModel:
     loads: ClassVar[list[dict[str, Any]]] = []
+    encodes: ClassVar[list[dict[str, Any]]] = []
     cache_lookups: ClassVar[list[tuple[str, str, str]]] = []
     modules_json_cached: ClassVar[bool] = True
     weights_cached: ClassVar[bool] = True
@@ -26,7 +32,7 @@ class StubModel:
         return f"/hf/{repo_id}/{revision}/{filename}" if StubModel.modules_json_cached else None
 
     def encode_document(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-        assert kwargs == {"batch_size": local.BATCH_SIZE, "normalize_embeddings": True}
+        StubModel.encodes.append(kwargs)
         return [[1.0, 0.0]] * len(texts)
 
     def encode_query(self, text: str, **kwargs: Any) -> list[float]:
@@ -37,6 +43,7 @@ class StubModel:
 @pytest.fixture
 def stub_sentence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
     StubModel.loads = []
+    StubModel.encodes = []
     StubModel.cache_lookups = []
     StubModel.modules_json_cached = True
     StubModel.weights_cached = True
@@ -103,6 +110,7 @@ def test_vectors_are_float32_arrays() -> None:
     assert documents.dtype == np.float32
     assert documents.shape == (2, 2)
     assert query.tolist() == [0.0, 1.0]
+    assert StubModel.encodes == [{"batch_size": 2, "normalize_embeddings": True}]
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")
@@ -147,3 +155,57 @@ def test_a_recorded_model_is_named_whichever_revision_it_was_pinned_to() -> None
     assert local.model_named_in("voyageai/voyage-4-nano@000000000000") == local.ModelName.VOYAGE_NANO
     assert local.model_named_in("voyageai/voyage-4-nano-v2@000000000000") is None
     assert local.model_named_in("") is None
+
+
+@dataclass
+class TinyHub:
+    tokenizer_file: Path
+    cached: bool = True
+    lookups: list[tuple[str, str, str]] = field(default_factory=list)
+    downloads: list[tuple[str, str, str]] = field(default_factory=list)
+
+    def try_to_load_from_cache(self, repo_id: str, filename: str, revision: str) -> str | None:
+        self.lookups.append((repo_id, filename, revision))
+        return str(self.tokenizer_file) if self.cached else None
+
+    def hf_hub_download(self, repo_id: str, filename: str, revision: str) -> str:
+        self.downloads.append((repo_id, filename, revision))
+        return str(self.tokenizer_file)
+
+
+@pytest.fixture
+def tiny_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TinyHub:
+    tokenizer = Tokenizer(WordLevel({"[UNK]": 0, "retry": 1, "upload": 2}, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.enable_truncation(max_length=2)
+    tokenizer.save(str(tmp_path / "tokenizer.json"))
+    hub = TinyHub(tmp_path / "tokenizer.json")
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    return hub
+
+
+def test_tokens_are_counted_with_the_cached_tokenizer_and_without_its_truncation(tiny_hub: TinyHub) -> None:
+    embedder = LocalEmbedder()
+
+    assert embedder.count_tokens(["retry the upload again", "", "retry"]) == [4, 0, 1]
+    assert embedder.count_tokens(["upload"]) == [1]
+    assert tiny_hub.lookups == [("voyageai/voyage-4-nano", "tokenizer.json", local.VOYAGE_NANO.revision)]
+    assert tiny_hub.downloads == []
+
+
+def test_a_tokenizer_not_in_the_cache_is_downloaded_at_the_pinned_revision(tiny_hub: TinyHub) -> None:
+    tiny_hub.cached = False
+
+    assert LocalEmbedder(local.BGE_SMALL).count_tokens(["retry upload"]) == [2]
+    assert tiny_hub.downloads == [("BAAI/bge-small-en-v1.5", "tokenizer.json", local.BGE_SMALL.revision)]
+
+
+def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(local, "COUNT_BATCH", 2)
+
+    assert LocalEmbedder().count_tokens(["retry", "retry upload", "a b c", "", "upload"]) == [1, 2, 3, 0, 1]
+
+
+def test_the_window_leaves_room_for_the_prompt() -> None:
+    assert LocalEmbedder().max_tokens == 32_768 - local.PROMPT_MARGIN
+    assert LocalEmbedder(local.BGE_SMALL).max_tokens == 512 - local.PROMPT_MARGIN

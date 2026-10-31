@@ -238,6 +238,7 @@ def test_repos_without_a_config_uses_the_defaults(tmp_path: Path, monkeypatch: p
 def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data_dir = ingest_setup(tmp_path, monkeypatch)
     shutil.copytree(FIXTURES / "crashcause", data_dir / "raw" / "ryckakas" / "crashcause")
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_: FakeEmbedder())
 
     result = runner.invoke(app, ["inspect", "--samples", "2", "--seed", "1"])
 
@@ -245,9 +246,11 @@ def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch:
     lines = [line.split() for line in result.output.splitlines()]
     assert lines[0] == ["7", "documents,", "24", "chunks"]
     assert lines[1:7] == [["pr", "5"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["plan", "0"]]
-    assert lines[7] == ["tokens", "(estimated)"]
-    assert [line[0] for line in lines[8:14]] == ["1-50", "51-100", "101-200", "201-400", "401-800", ">800"]
-    assert sum(int(line[1]) for line in lines[8:14]) == 24
+    assert lines[7] == ["tokens", "(voyage-4-nano)"]
+    buckets = ["1-50", "51-100", "101-200", "201-400", "401-800", "801-2048", "2049-8192", ">8192"]
+    assert [line[0] for line in lines[8:16]] == buckets
+    assert sum(int(line[1]) for line in lines[8:16]) == 24
+    assert result.output.splitlines()[16] == "Chunks hold at most 8192 tokens; 0 sections were split to fit."
     assert result.output.count("\n--- https://github.com/ryckakas/crashcause/") == 2
 
 
@@ -288,6 +291,23 @@ def test_build_embeds_new_chunks_and_reuses_them_next_time(cached_crashcause: Pa
     assert "24 embedded, 0 reused" in first.output
     assert "0 embedded, 24 reused" in second.output
     assert (cached_crashcause / "db" / "experiment.db").exists()
+    assert "Chunks hold at most 8192 tokens; 0 sections were split to fit." in first.output
+
+
+def test_build_never_packs_chunks_past_the_models_window(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(FakeEmbedder, "max_tokens", 80)
+
+    result = runner.invoke(app, ["build", "--db", "narrow", "--max-tokens", "20000"])
+
+    assert result.exit_code == 0
+    assert "Chunks hold at most 80 tokens;" in result.output
+    assert "0 sections were split" not in result.output
+    assert int(result.output.splitlines()[-1].split(" chunks indexed")[0]) > 24
+    with closing(connect(cached_crashcause / "db" / "narrow.db")) as db:
+        texts = [f"{header}\n\n{text}" for header, text in db.execute("select header, text from chunks")]
+    assert max(FakeEmbedder().count_tokens(texts)) <= 80
 
 
 def test_build_hides_http_request_logs(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:

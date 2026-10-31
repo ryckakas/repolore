@@ -4,6 +4,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache, partial
+from itertools import batched
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,8 +13,10 @@ from repolore.embedding import Vectors
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
+    from tokenizers import Tokenizer
 
-BATCH_SIZE = 16
+COUNT_BATCH = 1024
+PROMPT_MARGIN = 16
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,7 @@ class LocalModel:
     name: str
     revision: str
     dim: int
+    max_seq_length: int
     trust_remote_code: bool = False
     prompts: dict[str, str] = field(default_factory=dict)
 
@@ -34,12 +38,14 @@ VOYAGE_NANO = LocalModel(
     # The model runs its own code (trust_remote_code), so it is pinned to a reviewed commit.
     revision="5fb34e870f49f19e79c94d5e118f5ee730133279",
     dim=1024,
+    max_seq_length=32_768,
     trust_remote_code=True,
 )
 BGE_SMALL = LocalModel(
     name="BAAI/bge-small-en-v1.5",
     revision="5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
     dim=384,
+    max_seq_length=512,
     # The model card's query instruction; the checkpoint doesn't ship it as a saved prompt.
     prompts={"query": "Represent this sentence for searching relevant passages: "},
 )
@@ -68,6 +74,7 @@ class LocalEmbedder:
     def __init__(self, model: LocalModel = VOYAGE_NANO) -> None:
         self._spec = model
         self._model: SentenceTransformer | None = None
+        self._tokenizer: Tokenizer | None = None
         self._loading = threading.Lock()
 
     @property
@@ -78,9 +85,25 @@ class LocalEmbedder:
     def dim(self) -> int:
         return self._spec.dim
 
+    @property
+    def max_tokens(self) -> int:
+        # Room for the document prompt (7 tokens for voyage-4-nano) and special tokens (2 for bge-small).
+        return self._spec.max_seq_length - PROMPT_MARGIN
+
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
-        vectors = self._loaded().encode_document(list(texts), batch_size=BATCH_SIZE, normalize_embeddings=True)
+        batch = list(texts)
+        vectors = self._loaded().encode_document(batch, batch_size=max(len(batch), 1), normalize_embeddings=True)
         return np.asarray(vectors, dtype=np.float32)
+
+    def count_tokens(self, texts: Sequence[str]) -> list[int]:
+        """Tokens of each text before truncation, without the document prompt or special tokens."""
+        tokenizer = self._tokenizer_loaded()
+        # An encoding keeps ids, offsets and masks (about 100 bytes a token), so a whole corpus at once costs GBs.
+        return [
+            len(encoding.ids)
+            for part in batched(texts, COUNT_BATCH)
+            for encoding in tokenizer.encode_batch(list(part), add_special_tokens=False)
+        ]
 
     def embed_query(self, text: str) -> Vectors:
         return np.asarray(self._loaded().encode_query(text, normalize_embeddings=True), dtype=np.float32)
@@ -89,6 +112,18 @@ class LocalEmbedder:
         # The MCP server runs tool calls on worker threads; parallel first searches must not load the model twice.
         with self._loading:
             return self._load_once()
+
+    def _tokenizer_loaded(self) -> "Tokenizer":
+        with self._loading:
+            if self._tokenizer is None:
+                from tokenizers import Tokenizer
+
+                tokenizer = Tokenizer.from_file(_tokenizer_file(self._spec))
+                # Some tokenizer.json files carry the model's padding or truncation, which would distort counts.
+                tokenizer.no_padding()
+                tokenizer.no_truncation()
+                self._tokenizer = tokenizer
+            return self._tokenizer
 
     def _load_once(self) -> "SentenceTransformer":
         if self._model is None:
@@ -121,6 +156,13 @@ def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransforme
         with suppress(OSError):
             return load(local_files_only=True)
     return load()
+
+
+def _tokenizer_file(spec: LocalModel) -> str:
+    from huggingface_hub import hf_hub_download, try_to_load_from_cache
+
+    cached = try_to_load_from_cache(spec.name, "tokenizer.json", revision=spec.revision)
+    return cached if isinstance(cached, str) else hf_hub_download(spec.name, "tokenizer.json", revision=spec.revision)
 
 
 @cache
