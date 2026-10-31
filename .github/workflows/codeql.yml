@@ -2,7 +2,8 @@ name: CodeQL
 
 # Advanced setup rather than GitHub's default setup, because default setup skips pull requests from
 # forks, and the "Protect main" ruleset's code_scanning rule then waits on them forever. The
-# categories match the ones default setup used, so alerts carry over.
+# categories match the ones default setup used, so alerts carry over. The ruleset also requires each
+# analyze job by name, so renaming one needs the ruleset updated to match.
 on:
   pull_request:
   push:
