@@ -36,8 +36,9 @@ uv run repolore repos       # list the discovered repos and why each is in (owne
 uv run repolore ingest      # fetch what changed in them into the raw cache; --full refetches, --offline rereads it
 uv run repolore inspect     # chunk the cached documents: counts, token histogram, random samples
 uv run repolore build       # embed what changed and write the index (<data-dir>/db/default.db; --db names another,
-                            # --max-tokens splits long sections, --embedder picks the model,
-                            # --bot-reviews keeps review threads started by bots)
+                            # --max-tokens splits long sections (0 keeps them whole), --embedder picks the
+                            # model, --bot-reviews/--no-bot-reviews keeps or drops review threads started by
+                            # bots; a left-out option keeps the index's last value)
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --show-misses, --holdout
 uv run ruff format          # format

@@ -5,7 +5,8 @@ import pytest
 from conftest import DocumentFactory, FakeEmbedder
 
 from repolore.chunking import Chunk, chunk_document
-from repolore.indexing import BATCH_SIZE, build_index
+from repolore.embedding.local import BGE_SMALL, ModelName
+from repolore.indexing import BATCH_SIZE, BuildSettings, build_index
 from repolore.store import EmbeddingCache, connect, index_model
 
 
@@ -65,3 +66,32 @@ def test_progress_is_logged(
         build(tmp_path, corpus, fake_embedder)
 
     assert f"embedded {len(corpus)} of {len(corpus)} chunks" in caplog.text
+
+
+def test_an_index_without_recorded_settings_builds_with_the_defaults() -> None:
+    assert BuildSettings.recorded({}) == BuildSettings(max_tokens=None, bot_reviews=False, model=ModelName.VOYAGE_NANO)
+
+
+def test_recorded_settings_round_trip() -> None:
+    settings = BuildSettings(max_tokens=8192, bot_reviews=True, model=ModelName.BGE_SMALL)
+
+    assert BuildSettings.recorded(settings.meta() | {"model_id": BGE_SMALL.model_id}) == settings
+
+
+def test_an_unknown_recorded_model_falls_back_to_the_default() -> None:
+    assert BuildSettings.recorded({"model_id": "fake-bag-of-words"}).model == ModelName.VOYAGE_NANO
+
+
+def test_only_given_options_override_the_recorded_settings() -> None:
+    recorded = BuildSettings(max_tokens=50, bot_reviews=True, model=ModelName.BGE_SMALL)
+
+    assert recorded.overridden() == recorded
+    assert recorded.overridden(max_tokens=0, bot_reviews=False) == BuildSettings(model=ModelName.BGE_SMALL)
+    assert recorded.overridden(max_tokens=1, model=ModelName.VOYAGE_NANO) == BuildSettings(
+        1, True, ModelName.VOYAGE_NANO
+    )
+
+
+def test_settings_describe_themselves() -> None:
+    assert str(BuildSettings()) == "whole sections, bot reviews excluded, voyage-4-nano"
+    assert str(BuildSettings(8192, True)) == "sections split at 8192 tokens, bot reviews included, voyage-4-nano"

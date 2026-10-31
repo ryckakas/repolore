@@ -140,3 +140,10 @@ def test_embedder_for_matches_the_index_model_and_reuses_it() -> None:
 def test_embedder_for_an_unknown_model_says_to_rebuild() -> None:
     with pytest.raises(UnknownModelError, match="rebuild it"):
         embedder_for("someone/else@123")
+
+
+def test_a_recorded_model_is_named_whichever_revision_it_was_pinned_to() -> None:
+    assert local.model_named_in(local.BGE_SMALL.model_id) == local.ModelName.BGE_SMALL
+    assert local.model_named_in("voyageai/voyage-4-nano@000000000000") == local.ModelName.VOYAGE_NANO
+    assert local.model_named_in("voyageai/voyage-4-nano-v2@000000000000") is None
+    assert local.model_named_in("") is None
