@@ -37,7 +37,9 @@
           { "context": "build" },
           { "context": "typos" },
           { "context": "zizmor" },
-          { "context": "actionlint" }
+          { "context": "actionlint" },
+          { "context": "analyze (python)" },
+          { "context": "analyze (actions)" }
         ],
         "strict_required_status_checks_policy": false
       }

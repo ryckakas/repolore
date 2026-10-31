@@ -8,9 +8,11 @@ checks from `.github/workflows/ci.yml` to pass before a PR can merge. `audit` ru
 but isn't required: a newly published advisory would otherwise block every PR, related or not. No
 required review count: solo repo, so that's just CI plus a PR.
 
-CodeQL runs through GitHub's default setup (Python and Actions), not a workflow in this repo, so
-it is gated by a `code_scanning` rule rather than a status check: a PR can't merge without CodeQL
-results, or with an error-level alert or a high or critical security alert.
+CodeQL (Python and Actions) runs from `.github/workflows/codeql.yml`. Its `analyze (python)` and
+`analyze (actions)` jobs are required checks, so a failed analysis shows as a failed check rather
+than as results that never arrive. A `code_scanning` rule gates the results themselves: a PR can't
+merge without them, or with an error-level alert or a high or critical security alert. GitHub's default setup is switched off,
+because it skips pull requests from forks, which would leave this rule waiting on them forever.
 
 The file is the source of truth, but GitHub doesn't read it. A change here, such as a renamed or
 added CI job, has to be applied by hand: **Settings → Rules → Rulesets → Protect main**, or
