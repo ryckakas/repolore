@@ -39,6 +39,7 @@ uv run repolore build       # embed what changed and write the index (<data-dir>
                             # --max-tokens splits long sections (0: the default, 8192 or a smaller window),
                             # --embedder picks the model, --bot-reviews/--no-bot-reviews keeps or drops review
                             # threads started by bots; a left-out option keeps the index's last value)
+uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --show-misses, --holdout
 uv run ruff format          # format
@@ -156,10 +157,15 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `evals/runs.py` (each run saved under `<data-dir>/evals/runs/`, compared with the previous one on the same
   questions). A run also records the index size and the median search time per question, which is how search
   latency is measured at a given corpus size. `EXPERIMENTS.md` logs every retrieval experiment, aggregate numbers only.
-- `mcp_server.py` serves `search` and `list_repos` to Claude Code over stdio (`repolore-mcp`, official `mcp` SDK
-  v2 with `MCPServer`; the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so
+- `mcp_server.py` serves `search`, `list_repos` and `refresh` to Claude Code over stdio (`repolore-mcp`, official
+  `mcp` SDK v2 with `MCPServer`; the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so
   `repolore build` can rewrite it meanwhile, and loads the model on the first search (about a minute here).
-  Never print to stdout in code the server runs: stdout carries the protocol.
+  `list_repos` also returns the index's `built_at` and the last refresh's status. Never print to stdout in code the
+  server runs: stdout carries the protocol.
+- `refresh.py` runs one refresh at a time. `repolore refresh` holds an OS file lock (`<data-dir>/refresh.lock`, via
+  `filelock`, so a killed run leaves no stale lock) and records its start, end and outcome in `refresh.json`. The MCP
+  `refresh` tool doesn't refresh in the server: it starts `python -m repolore refresh` as a detached process that
+  writes to `refresh.log` and outlives the session, so the server loads no second model and blocks no worker thread.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
 
 Nothing is async: the MCP SDK runs the plain `def` tools on worker threads, and the rest of the pipeline is

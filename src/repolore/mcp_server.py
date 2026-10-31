@@ -15,19 +15,22 @@ from repolore.documents import DocumentKind
 from repolore.embedding import Embedder
 from repolore.embedding.local import UnknownModelError, embedder_for
 from repolore.hub import ModelUnavailableError
-from repolore.paths import resolve_paths
+from repolore.paths import AppPaths, resolve_paths
+from repolore.refresh import RefreshStatus, refresh_status, start_refresh
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
-from repolore.store import Filters, Hit, StoreError, connect_read_only, index_model, repo_counts
+from repolore.store import Filters, Hit, StoreError, connect_read_only, index_model, index_settings, repo_counts
 
 TEXT_CHARS = 1500
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+REFRESHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 INSTRUCTIONS = (
     "Searches the user's own engineering history on GitHub: pull request descriptions and discussions, review "
     "threads, issues, commits without a PR, and repository markdown (README, AGENTS.md, docs). Use it when the user "
     "asks why or how something was decided, built, fixed or rejected in their repos, or which repo already did "
     "something. Results are passages with GitHub permalinks; cite the permalinks. The first search in a session "
-    "loads the embedding model and can take about a minute."
+    "loads the embedding model and can take about a minute. list_repos says when the index was built; when it looks "
+    "out of date for the question, the refresh tool updates it in the background."
 )
 
 
@@ -58,10 +61,18 @@ class Repo(BaseModel):
 
 class Repos(BaseModel):
     repos: list[Repo]
+    built_at: str | None = Field(description="When the index was last built, in UTC.")
+    refresh: RefreshStatus = Field(description="The last refresh started from here or with `repolore refresh`.")
 
 
-def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> MCPServer:
+class Refresh(BaseModel):
+    started: bool
+    message: str
+
+
+def create_server(paths: AppPaths, db_name: str, embedder_for: Callable[[str], Embedder]) -> MCPServer:
     server = MCPServer("repolore", version=__version__, instructions=INSTRUCTIONS)
+    index_file = paths.index_file(db_name)
 
     @server.tool(annotations=READ_ONLY)
     def search(
@@ -90,12 +101,26 @@ def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> 
     @server.tool(annotations=READ_ONLY)
     def list_repos() -> Repos:
         """List the indexed repos and how many passages of each kind they have."""
-        with _open(index_file) as db:
-            try:
+        status = refresh_status(paths.data_dir)
+        try:
+            with _open(index_file) as db:
                 counts = repo_counts(db)
-            except StoreError as error:
-                raise ToolError(str(error)) from error
-        return Repos(repos=[Repo(repo=repo, chunks=chunks) for repo, chunks in counts.items()])
+                built_at = index_settings(db).get("built_at")
+        except (ToolError, StoreError) as error:
+            raise ToolError(f"{error}{_refresh_note(status)}") from error
+        return Repos(
+            repos=[Repo(repo=repo, chunks=chunks) for repo, chunks in counts.items()],
+            built_at=built_at,
+            refresh=status,
+        )
+
+    @server.tool(annotations=REFRESHES)
+    def refresh() -> Refresh:
+        """Fetch what changed on GitHub and rebuild the index, in the background: a minute or two when it was refreshed
+        recently, up to an hour the first time. Search keeps working meanwhile; list_repos shows how it went."""
+        if start_refresh(paths.data_dir, db_name):
+            return Refresh(started=True, message="Refresh started in the background.")
+        return Refresh(started=False, message="A refresh is already running; list_repos shows how it goes.")
 
     return server
 
@@ -103,9 +128,17 @@ def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> 
 @contextmanager
 def _open(index_file: Path) -> Generator[sqlite3.Connection]:
     if not index_file.exists():
-        raise ToolError(f"No index at {index_file}; run `repolore ingest` and `repolore build` first.")
+        raise ToolError(f"No index at {index_file}; use the refresh tool, or run `repolore refresh`, to build it.")
     with closing(connect_read_only(index_file)) as db:
         yield db
+
+
+def _refresh_note(status: RefreshStatus) -> str:
+    if status.running:
+        return " A refresh is running."
+    if status.ok is False:
+        return f" The last refresh failed: {status.error}"
+    return ""
 
 
 def _result(hit: Hit) -> Result:
@@ -128,7 +161,7 @@ def serve(
     db: Annotated[str, typer.Option(help="Name of the index to serve.")] = "default",
 ) -> None:
     """Serve search over the repolore index to an MCP client on stdin and stdout."""
-    create_server(resolve_paths(data_dir).index_file(db), embedder_for).run()
+    create_server(resolve_paths(data_dir), db, embedder_for).run()
 
 
 def main() -> None:

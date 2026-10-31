@@ -3,6 +3,7 @@ import re
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -136,7 +137,8 @@ def write_index(
     with db:
         drops = "".join(f"drop table if exists {table};" for table in TABLES)
         db.executescript(f"begin immediate;{drops}{SCHEMA.format(dim=dim)}")
-        meta = {**(settings or {}), "model_id": model_id, "dim": str(dim)}
+        built_at = datetime.now(UTC).isoformat(timespec="seconds")
+        meta = {**(settings or {}), "model_id": model_id, "dim": str(dim), "built_at": built_at}
         db.executemany("insert into meta (key, value) values (?, ?)", meta.items())
         for rowid, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True), start=1):
             _insert_chunk(db, rowid, chunk, vector)

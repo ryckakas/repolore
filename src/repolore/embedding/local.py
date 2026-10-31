@@ -97,7 +97,9 @@ class LocalEmbedder:
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
         batch = list(texts)
-        vectors = self._loaded().encode_document(batch, batch_size=max(len(batch), 1), normalize_embeddings=True)
+        vectors = self._loaded().encode_document(
+            batch, batch_size=max(len(batch), 1), normalize_embeddings=True, show_progress_bar=False
+        )
         return np.asarray(vectors, dtype=np.float32)
 
     def count_tokens(self, texts: Sequence[str]) -> list[int]:
@@ -111,7 +113,9 @@ class LocalEmbedder:
         ]
 
     def embed_query(self, text: str) -> Vectors:
-        return np.asarray(self._loaded().encode_query(text, normalize_embeddings=True), dtype=np.float32)
+        return np.asarray(
+            self._loaded().encode_query(text, normalize_embeddings=True, show_progress_bar=False), dtype=np.float32
+        )
 
     def _loaded(self) -> "SentenceTransformer":
         # The MCP server runs tool calls on worker threads; parallel first searches must not load the model twice.

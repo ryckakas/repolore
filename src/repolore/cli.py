@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Generator
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 import yaml
@@ -36,6 +36,7 @@ from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
 from repolore.paths import AppPaths, resolve_paths
+from repolore.refresh import RefreshRunning, refreshing
 from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
@@ -152,8 +153,13 @@ def _exit_on(*errors: type[Exception]) -> Generator[None]:
     try:
         yield
     except errors as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(1) from None
+        _fail(str(error))
+
+
+def _fail(message: str) -> NoReturn:
+    typer.echo(message, err=True)
+    # The cause carries the message to `refresh`, which records why a run failed.
+    raise typer.Exit(1) from RuntimeError(message)
 
 
 @contextmanager
@@ -165,8 +171,7 @@ def _github() -> Generator[GitHubClient]:
 def _cached_documents(paths: AppPaths, include_bot_reviews: bool = False) -> list[Document]:
     documents = cached_documents(paths.raw_dir, include_bot_reviews)
     if not documents:
-        typer.echo(f"Nothing cached in {paths.raw_dir}; run `repolore ingest` first.", err=True)
-        raise typer.Exit(1)
+        _fail(f"Nothing cached in {paths.raw_dir}; run `repolore ingest` first.")
     return documents
 
 
@@ -174,8 +179,7 @@ def _config_or_exit(path: Path) -> Config:
     try:
         return load_config(path)
     except (tomllib.TOMLDecodeError, ValidationError) as error:
-        typer.echo(f"{path} is invalid:\n{error}", err=True)
-        raise typer.Exit(1) from None
+        _fail(f"{path} is invalid:\n{error}")
 
 
 def _print_counts(documents: list[Document]) -> None:
@@ -287,6 +291,18 @@ def build(
         f"{stats.chunks} chunks indexed in {index_file}, {stats.embedded} embedded, "
         f"{stats.chunks - stats.embedded} reused"
     )
+
+
+@app.command()
+def refresh(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
+    """Ingest what changed and rebuild the index with the settings it was built with, one refresh at a time.
+
+    The MCP server's refresh tool runs this in the background; its outcome is kept in the data dir.
+    """
+    paths: AppPaths = ctx.obj
+    with _exit_on(RefreshRunning), refreshing(paths.data_dir):
+        ingest(ctx)
+        build(ctx, db)
 
 
 def _recorded_settings(index_file: Path) -> BuildSettings:

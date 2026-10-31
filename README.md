@@ -69,9 +69,26 @@ and macOS 14+ on Apple Silicon.
    Claude Code then gets `search` and `list_repos` tools and can answer questions about your history with links to
    the sources. The first search in a session loads the model, which takes a little while.
 
-To stay current, run `repolore ingest` and `repolore build` again. `uv tool upgrade repolore` updates repolore
-itself. The index and the raw GitHub responses live in the data directory that `repolore version` prints; they
-contain your private repos' content, so treat that folder like the repos themselves.
+To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was
+built with, and only one refresh runs at a time. Search keeps working meanwhile. Claude Code can do the same: the MCP
+server's `refresh` tool starts one in the background, and `list_repos` says when the index was built and how the
+last refresh went. Claude Code asks before the first call; to allow it for good, add `mcp__repolore__refresh` to
+`permissions.allow` in your Claude Code settings. To refresh once at the start of every session instead, add a
+`SessionStart` hook to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [{ "type": "command", "command": "repolore refresh", "async": true }] }
+    ]
+  }
+}
+```
+
+`uv tool upgrade repolore` updates repolore itself. The index and the raw GitHub responses live in the data
+directory that `repolore version` prints; they contain your private repos' content, so treat that folder like the
+repos themselves.
 
 ## What the experiments found
 
