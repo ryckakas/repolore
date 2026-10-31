@@ -215,12 +215,23 @@ def test_repo_without_a_default_branch_has_no_commits_or_docs() -> None:
 
 
 def test_truncated_inner_connection_is_logged(caplog: pytest.LogCaptureFixture) -> None:
-    fake = FakeGitHub(RepoPullRequests=[page([pull(4, files=120)])])
+    first = pull(4, files=120)
+    first["comments"] = {"totalCount": 2, "nodes": []}
+    first["reviewThreads"] = {"totalCount": 3, "nodes": []}
+    fake = FakeGitHub(RepoPullRequests=[page([first, pull(5, files=110)])])
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         fetch_repo(client_for(fake.handle), "octo/repo")
 
     assert "octo/repo#4: only 0 of 120 files fetched" in caplog.text
+    assert ("octo/repo: files truncated to the first 0 (PRs affected: 2)", logging.INFO) in [
+        (record.message, record.levelno) for record in caplog.records
+    ]
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert warnings == [
+        "octo/repo#4: only 0 of 2 comments fetched",
+        "octo/repo#4: only 0 of 3 reviewThreads fetched",
+    ]
 
 
 def test_truncated_tree_is_logged(caplog: pytest.LogCaptureFixture) -> None:
