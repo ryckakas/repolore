@@ -556,9 +556,33 @@ def test_rebuild_warns_when_recorded_settings_change(cached_crashcause: Path) ->
 
     changed = runner.invoke(app, ["build", "--db", "changes", "--max-tokens", "0", "--no-bot-reviews"])
     assert changed.exit_code == 0
-    assert "max_tokens: 50 -> whole" in changed.output
+    assert "max_tokens: 50 -> 8192" in changed.output
     assert "bot_reviews: included -> excluded" in changed.output
     assert "chunks may be re-embedded" in changed.output
+
+
+def test_the_default_limit_and_the_same_limit_given_are_one_setting(cached_crashcause: Path) -> None:
+    runner.invoke(app, ["build", "--db", "same", "--max-tokens", "8192"])
+
+    result = runner.invoke(app, ["build", "--db", "same", "--max-tokens", "0"])
+
+    assert result.exit_code == 0
+    assert "Warning: build settings changed" not in result.output
+    with closing(connect(cached_crashcause / "db" / "same.db")) as db:
+        assert index_settings(db)["max_tokens"] == "8192"
+
+
+def test_an_index_built_with_unbounded_sections_warns_once(cached_crashcause: Path) -> None:
+    runner.invoke(app, ["build", "--db", "old"])
+    with closing(connect(cached_crashcause / "db" / "old.db")) as db, db:
+        db.execute("update meta set value = 'whole' where key = 'max_tokens'")
+
+    first = runner.invoke(app, ["build", "--db", "old"])
+    second = runner.invoke(app, ["build", "--db", "old"])
+
+    assert "Building with sections split at 8192 tokens (the default)" in first.output
+    assert "max_tokens: whole -> 8192" in first.output
+    assert "Warning: build settings changed" not in second.output
 
 
 def test_rebuild_without_options_keeps_the_recorded_settings(cached_crashcause: Path) -> None:
@@ -589,7 +613,10 @@ def test_first_build_uses_the_defaults(cached_crashcause: Path) -> None:
     result = runner.invoke(app, ["build", "--db", "fresh"])
 
     assert result.exit_code == 0
-    assert "Building with whole sections, bot reviews excluded, voyage-4-nano." in result.output
+    assert (
+        "Building with sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano."
+        in result.output
+    )
 
 
 def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -> None:
@@ -599,7 +626,10 @@ def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -
     result = runner.invoke(app, ["build", "--db", "empty"])
 
     assert result.exit_code == 0
-    assert "Building with whole sections, bot reviews excluded, voyage-4-nano." in result.output
+    assert (
+        "Building with sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano."
+        in result.output
+    )
 
 
 def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -609,6 +639,7 @@ def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: 
         loaded.append(model)
         embedder = FakeEmbedder()
         embedder.model_id = model.model_id
+        embedder.max_tokens = model.max_tokens
         return embedder
 
     monkeypatch.setattr("repolore.cli.LocalEmbedder", local_embedder)
@@ -617,7 +648,7 @@ def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: 
     result = runner.invoke(app, ["build", "--db", "small-model"])
 
     assert loaded == [BGE_SMALL, BGE_SMALL]
-    assert "Building with whole sections, bot reviews excluded, bge-small." in result.output
+    assert "Building with sections split at 496 tokens (the default), bot reviews excluded, bge-small." in result.output
     assert "Warning: build settings changed" not in result.output
 
 
@@ -644,6 +675,6 @@ def test_eval_records_the_index_settings(eval_questions: Path, cached_crashcause
 
     [run_file] = (cached_crashcause / "evals" / "runs").glob("*.json")
     config = json.loads(run_file.read_text(encoding="utf-8"))["config"]
-    assert config["max_tokens"] == "whole"
+    assert config["max_tokens"] == "8192"
     assert config["bot_reviews"] == "excluded"
     assert config["retrieval"] == "hybrid"

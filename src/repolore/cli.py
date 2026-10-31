@@ -266,9 +266,9 @@ def build(
     paths: AppPaths = ctx.obj
     index_file = paths.index_file(db)
     settings = _recorded_settings(index_file).overridden(max_tokens, bot_reviews, embedder)
-    typer.echo(f"Building with {settings}.")
     model = LocalEmbedder(MODELS[settings.model])
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
+    typer.echo(f"Building with {settings.described(limit)}.")
     documents = _cached_documents(paths, settings.bot_reviews)
     with _exit_on(ModelUnavailableError):
         chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
@@ -278,11 +278,11 @@ def build(
         closing(connect(index_file)) as index,
         closing(connect(paths.embedding_cache)) as cache,
     ):
-        changes = changed_settings(index, settings.meta() | {"model_id": model.model_id})
+        changes = changed_settings(index, settings.meta(limit) | {"model_id": model.model_id})
         if changes:
             details = ", ".join(f"{key}: {old} -> {new}" for key, (old, new) in changes.items())
             typer.echo(f"Warning: build settings changed ({details}); chunks may be re-embedded.", err=True)
-        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings.meta())
+        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings.meta(limit))
     typer.echo(
         f"{stats.chunks} chunks indexed in {index_file}, {stats.embedded} embedded, "
         f"{stats.chunks - stats.embedded} reused"
