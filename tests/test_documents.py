@@ -142,6 +142,51 @@ def test_only_commits_without_a_pull_request_are_kept() -> None:
     assert [commit.url for commit in commits] == [PR_LESS_COMMIT]
 
 
+def fetched_commit(oid: str) -> dict[str, Any]:
+    pr_less = {key: value for key, value in CRASHCAUSE.commits[2].items() if key != "associatedPullRequests"}
+    return pr_less | {"oid": oid}
+
+
+def commit_kinds(raw: RawRepo) -> list[DocumentKind]:
+    return [document.kind for document in documents_from(raw) if document.kind is DocumentKind.COMMIT]
+
+
+@pytest.mark.parametrize(
+    ("oid", "kept"),
+    [
+        pytest.param("69531a3aa08bf8d47f1428261efc3038537127b6", True, id="in no pull request"),
+        pytest.param("1639e4be1a8b129f403d643aad437f01d25c0c8e", False, id="a merged pull request's commit"),
+        pytest.param("f662f5cd0424f99d6af7b0281f14a43402e6c2cb", False, id="a pull request's merge commit"),
+        pytest.param("0344bf74c36f4be57cf6eb03e411ac2e874c0f7d", False, id="a closed pull request's commit"),
+    ],
+)
+def test_a_fetched_commit_is_matched_to_the_pull_requests_by_oid(oid: str, kept: bool) -> None:
+    assert commit_kinds(crashcause(commits=[fetched_commit(oid)])) == ([DocumentKind.COMMIT] if kept else [])
+
+
+def test_a_repo_without_pull_requests_keeps_its_commits() -> None:
+    raw = crashcause(pulls=[], commits=[fetched_commit("1639e4be1a8b129f403d643aad437f01d25c0c8e")])
+
+    assert commit_kinds(raw) == [DocumentKind.COMMIT]
+
+
+def test_a_commit_cached_with_githubs_answer_keeps_it() -> None:
+    cached = fetched_commit("1639e4be1a8b129f403d643aad437f01d25c0c8e") | {"associatedPullRequests": {"totalCount": 0}}
+
+    assert commit_kinds(crashcause(commits=[cached])) == [DocumentKind.COMMIT]
+
+
+def test_pull_requests_cached_without_oids_still_load() -> None:
+    pulls = copy.deepcopy(CRASHCAUSE.pulls)
+    del pulls[0]["mergeCommit"]
+    for node in pulls[0]["commits"]["nodes"]:
+        del node["commit"]["oid"]
+
+    documents = documents_from(crashcause(pulls=pulls))
+
+    assert by_url(documents, "https://github.com/ryckakas/crashcause/pull/1").kind is DocumentKind.PR
+
+
 def test_commit_headline_is_rejoined_and_claude_trailer_stripped() -> None:
     commit = by_url(documents_from(CRASHCAUSE), PR_LESS_COMMIT)
 

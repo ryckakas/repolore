@@ -116,7 +116,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   rewritten or merged with older commit dates, need `ingest --full`.
 - `documents.py` normalizes into `Document`s. Bots are filtered by GraphQL `author.__typename`,
   not by a login list. Deleted accounts become `ghost`. Review threads a bot started are dropped unless the index
-  is built with `--bot-reviews`. Plans are private `plan` documents with `file://` URLs.
+  is built with `--bot-reviews`. Plans are private `plan` documents with `file://` URLs. A commit is indexed only
+  when no PR has it: its oid is neither a PR's merge commit nor one of its first 100 commits, whatever the PR's state.
+  The history query doesn't ask GitHub per commit, which made its pages up to 3x slower; commits cached while it did
+  keep GitHub's answer. A rebase merge gives the commits new oids, so all but the last commit of a rebase-merged PR
+  are indexed as commits too.
 - `chunking.py` splits each document's markdown at headings (markdown-it-py, top-level blocks only, so
   a code fence or table stays one block), keeps each section whole up to a limit, and prefixes each chunk with a
   header like `owner/repo · PR #17 · <title> · <section>`. The limit is `--max-tokens` or else an 8,192-token

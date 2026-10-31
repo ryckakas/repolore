@@ -6,6 +6,9 @@
   "url": "https://github.com/ryckakas/crashcause/pull/1",
   "state": "MERGED",
   "createdAt": "2026-08-02T20:45:01Z",
+  "mergeCommit": {
+   "oid": "03a1c26aed696b692a856e24e5947e890fc37aea"
+  },
   "author": {
    "login": "ryckakas",
    "__typename": "User"
@@ -101,18 +104,21 @@
    "nodes": [
     {
      "commit": {
+      "oid": "1639e4be1a8b129f403d643aad437f01d25c0c8e",
       "messageHeadline": "Fix CI: golangci-lint v2 config schema, x/text + x/net security bumps",
       "messageBody": "- remove exhaustive.check-generated (rejected by golangci-lint 2.12 schema)\n- bump golang.org/x/text to v0.40.0 and x/net to v0.57.0 for GO-2026-5970,\n  GO-2026-5026, GO-2026-4918 (reachable via the AI layer HTTP client)\n- pin toolchain go1.25.0 (pulled forward by the x/net requirement)\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
      }
     },
     {
      "commit": {
+      "oid": "6212e9d51cfcc2b7be720714c5456f1432f1f74e",
       "messageHeadline": "e2e: fix stuck-init wait predicate jsonpath (missing .status prefix)",
       "messageBody": "The startedAt query hit a nonexistent path, so the readiness condition\nnever passed and the scenario timed out despite the pod being correctly\nstuck (confirmed by the CI run's describe dump).\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
      }
     },
     {
      "commit": {
+      "oid": "9efb864298bf68d724dffb10f479c29d10fc56ad",
       "messageHeadline": "Fix all golangci-lint findings",
       "messageBody": "CI (golangci-lint v2.12.2) reported 39 issues on this branch; running the\nsame linter locally surfaced a handful more that the CI log had capped.\nAll are fixed at the source — no file-level exclusions were added to\n.golangci.yml, and only one targeted //nolint (with a reason) was needed.\n\nmisspell (24): British -> US spellings in comments and test-case strings\n  across internal/engine, internal/inspect, internal/sinks and\n  internal/watch (behaviour, cancelled, marshalled, recognised, serialise,\n  colour, honouring, summarises, cancelling). All occurrences were in\n  comments or subtest names; no identifiers needed renaming.\n\nerrcheck (5): unchecked fmt.Fprintln to report/error writers in\n  internal/inspect/inspect.go and internal/cli/root.go are now `_, _ =`,\n  matching how the codebase already treats best-effort output. The\n  enclosing helpers return int exit codes, not errors, so there is no\n  error-propagation pattern to follow.\n\ncontextcheck (3): shutdownServers, startServers/serveMux and\n  Controller.closeSinks now take the caller's context. The shutdown\n  timeout is derived from context.WithoutCancel(ctx) rather than ctx\n  directly: Run's deferred shutdown runs precisely when ctx is already\n  canceled, so wrapping ctx itself would abort the graceful drain instead\n  of honoring shutdownTimeout. This keeps the existing bounded\n  grace-period semantics exactly.\n\nnoctx (4): net.Listen -> (&net.ListenConfig{}).Listen(ctx, ...) in\n  internal/watch/server.go; httptest.NewRequestWithContext and\n  http.NewRequestWithContext + client.Do in the sinks and watch tests\n  (response bodies are still closed, keeping bodyclose satisfied).\n\ngosec (2): G304 in internal/cli/ai_flags.go is resolved by filepath.Clean\n  on the --ai-redact-extra path — reading an operator-provided pattern\n  file is the documented feature. G101 on internal/sinks/loki.go's\n  lokiEnvBearerToken carries the only //nolint in this change: the\n  constant is the *name* of an env var, not a credential.\n\nrevive (4): doc comments on the three exported const blocks in\n  internal/engine/types.go (block comments, not per-constant), and an\n  unused test-helper parameter renamed to _.\n\nstaticcheck QF1002 (1): internal/collect/node.go uses a tagged switch on\n  cond.Type. Because .golangci.yml sets default-signifies-exhaustive:\n  false, the tagged form newly required full enum coverage, so the two\n  non-pressure NodeConditionType values get an explicit no-op case —\n  behaviorally identical to the previous untagged switch.\n\nunparam (1): eventsMatching's `reason` parameter always received\n  \"Unhealthy\" at all four call sites; it is dropped and applied inside\n  the function.\n\ncopyloopvar (1): removed a redundant `tc := tc` in loki_test.go.\n\nNo behavior changes. gofmt clean, go build, go vet and\ngo test -race -count=1 ./... all pass; golangci-lint run ./... reports\n0 issues.\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
      }
@@ -139,6 +145,7 @@
   "url": "https://github.com/ryckakas/crashcause/pull/3",
   "state": "CLOSED",
   "createdAt": "2026-08-03T07:17:15Z",
+  "mergeCommit": null,
   "author": {
    "login": "dependabot",
    "__typename": "Bot"
@@ -159,6 +166,7 @@
    "nodes": [
     {
      "commit": {
+      "oid": "0344bf74c36f4be57cf6eb03e411ac2e874c0f7d",
       "messageHeadline": "Bump the kubernetes group with 3 updates",
       "messageBody": "Bumps the kubernetes group with 3 updates: [k8s.io/apimachinery](https://github.com/kubernetes/apimachinery), [k8s.io/cli-runtime](https://github.com/kubernetes/cli-runtime) and [k8s.io/client-go](https://github.com/kubernetes/client-go).\n\n\nUpdates `k8s.io/apimachinery` from 0.31.4 to 0.36.3\n- [Commits](https://github.com/kubernetes/apimachinery/compare/v0.31.4...v0.36.3)\n\nUpdates `k8s.io/cli-runtime` from 0.31.4 to 0.36.3\n- [Commits](https://github.com/kubernetes/cli-runtime/compare/v0.31.4...v0.36.3)\n\nUpdates `k8s.io/client-go` from 0.31.4 to 0.36.3\n- [Changelog](https://github.com/kubernetes/client-go/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/kubernetes/client-go/compare/v0.31.4...v0.36.3)\n\n---\nupdated-dependencies:\n- dependency-name: k8s.io/apimachinery\n  dependency-version: 0.36.3\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: kubernetes\n- dependency-name: k8s.io/cli-runtime\n  dependency-version: 0.36.3\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: kubernetes\n- dependency-name: k8s.io/client-go\n  dependency-version: 0.36.3\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: kubernetes\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>"
      }
@@ -194,6 +202,9 @@
   "url": "https://github.com/ryckakas/crashcause/pull/15",
   "state": "MERGED",
   "createdAt": "2026-08-03T13:03:04Z",
+  "mergeCommit": {
+   "oid": "f662f5cd0424f99d6af7b0281f14a43402e6c2cb"
+  },
   "author": {
    "login": "ryckakas",
    "__typename": "User"
@@ -226,6 +237,7 @@
    "nodes": [
     {
      "commit": {
+      "oid": "9f9aeaf329774fc8112c4cb29b8bf2ddfc00f058",
       "messageHeadline": "Prepare the v0.1.0 release",
       "messageBody": "Cut the CHANGELOG's Unreleased section as 0.1.0 and replace the\npre-release claims in the README and chart README, which asserted there\nwas no release, no downloadable binary and no chart distribution - all\nfalse the moment the tag is pushed.\n\nPublish the Helm chart as an OCI artifact to ghcr.io/ryckakas/charts in\na new release job, chosen over a gh-pages chart repository so there is\nno index.yaml or Pages branch to keep consistent and so it reuses the\nghcr credentials the release workflow already needs. The job is gated on\ngoreleaser succeeding, and refuses to push a chart whose appVersion does\nnot match the tag, since appVersion is the image tag the chart deploys\nby default.\n\nRenumber the chart from 0.1.1 to 0.1.0 so the first published chart\nmatches its appVersion; 0.1.1 only ever existed pre-publication.\n\nNarrow the workflow's top-level permissions to contents:read and grant\nthe write scopes per job instead.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
      }
