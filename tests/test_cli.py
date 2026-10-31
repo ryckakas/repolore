@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import shutil
 import sys
 from contextlib import closing
@@ -264,6 +265,15 @@ def test_build_embeds_new_chunks_and_reuses_them_next_time(cached_crashcause: Pa
     assert "24 embedded, 0 reused" in first.output
     assert "0 embedded, 24 reused" in second.output
     assert (cached_crashcause / "db" / "experiment.db").exists()
+
+
+def test_build_hides_http_request_logs(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    httpx_logger = logging.getLogger("httpx")
+    monkeypatch.setattr(httpx_logger, "level", logging.NOTSET)
+
+    runner.invoke(app, ["build"])
+
+    assert httpx_logger.level == logging.WARNING
 
 
 def test_search_prints_ranked_hits_with_links(cached_crashcause: Path) -> None:
