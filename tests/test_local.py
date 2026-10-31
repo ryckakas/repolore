@@ -40,7 +40,7 @@ class StubModel:
         return [[1.0, 0.0]] * len(texts)
 
     def encode_query(self, text: str, **kwargs: Any) -> list[float]:
-        assert kwargs == {"normalize_embeddings": True}
+        assert kwargs == {"normalize_embeddings": True, "show_progress_bar": False}
         return [0.0, 1.0]
 
 
@@ -124,7 +124,7 @@ def test_vectors_are_float32_arrays() -> None:
     assert documents.dtype == np.float32
     assert documents.shape == (2, 2)
     assert query.tolist() == [0.0, 1.0]
-    assert StubModel.encodes == [{"batch_size": 2, "normalize_embeddings": True}]
+    assert StubModel.encodes == [{"batch_size": 2, "normalize_embeddings": True, "show_progress_bar": False}]
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")

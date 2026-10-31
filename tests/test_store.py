@@ -1,6 +1,7 @@
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -205,7 +206,11 @@ def test_build_settings_are_kept_beside_the_model(
         vectors = fake_embedder.embed_documents([chunk.embedded_text for chunk in corpus])
         write_index(db, corpus, vectors, fake_embedder.model_id, fake_embedder.dim, {"max_tokens": "200"})
 
-        assert index_settings(db) == {"max_tokens": "200", "model_id": "fake-bag-of-words", "dim": "64"}
+        settings = index_settings(db)
+
+    built_at = datetime.fromisoformat(settings.pop("built_at"))
+    assert settings == {"max_tokens": "200", "model_id": "fake-bag-of-words", "dim": "64"}
+    assert timedelta(0) <= datetime.now(UTC) - built_at < timedelta(minutes=1)
 
 
 def test_python_without_sqlite_extensions_gets_a_clear_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

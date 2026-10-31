@@ -19,6 +19,7 @@ from repolore.documents import Document
 from repolore.embedding.local import BGE_SMALL, LocalModel
 from repolore.hub import ModelUnavailableError
 from repolore.paths import resolve_paths
+from repolore.refresh import refresh_status, refreshing
 from repolore.sources.github import GitHubClient, GitHubError
 from repolore.store import connect, index_settings
 
@@ -678,3 +679,44 @@ def test_eval_records_the_index_settings(eval_questions: Path, cached_crashcause
     assert config["max_tokens"] == "8192"
     assert config["bot_reviews"] == "excluded"
     assert config["retrieval"] == "hybrid"
+
+
+def test_refresh_ingests_then_rebuilds_with_the_recorded_settings(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    online(monkeypatch)
+    fetched: list[bool] = []
+    monkeypatch.setattr("repolore.cli.ingest_repos", lambda _, __, ___, full: fetched.append(full) or [])
+    runner.invoke(app, ["build", "--max-tokens", "50"])
+
+    result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 0
+    assert fetched == [False]
+    assert "Building with sections split at 50 tokens, bot reviews excluded, voyage-4-nano." in result.output
+    assert "0 embedded" in result.output
+    status = refresh_status(cached_crashcause)
+    assert (status.running, status.ok, status.error) == (False, True, None)
+
+
+def test_a_failed_refresh_records_the_failure(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_token() -> str:
+        raise GitHubError("No GitHub token")
+
+    monkeypatch.setattr("repolore.cli.resolve_token", no_token)
+
+    result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 1
+    assert "No GitHub token" in result.output
+    assert not (cached_crashcause / "db" / "default.db").exists()
+    status = refresh_status(cached_crashcause)
+    assert (status.ok, status.error) == (False, "No GitHub token")
+
+
+def test_refresh_refuses_while_another_runs(cached_crashcause: Path) -> None:
+    with refreshing(cached_crashcause):
+        result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 1
+    assert "A refresh is already running." in result.output
