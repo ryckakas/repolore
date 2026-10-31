@@ -4,12 +4,14 @@ name: CodeQL
 # forks, and the "Protect main" ruleset's code_scanning rule then waits on them forever. The
 # categories match the ones default setup used, so alerts carry over. The ruleset also requires each
 # analyze job by name, so renaming one needs the ruleset updated to match.
+#
+# No weekly schedule: the pinned action fixes the CodeQL version, so rescanning an unchanged main
+# would run the same queries. New queries arrive with a Dependabot bump, which is scanned on its pull
+# request and again on main.
 on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: "17 4 * * 1"
 
 permissions:
   contents: read
