@@ -1,13 +1,15 @@
+from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 from conftest import DocumentFactory, FakeEmbedder
 
+from repolore import indexing
 from repolore.chunking import Chunk, chunk_document
 from repolore.embedding.local import BGE_SMALL, ModelName
-from repolore.indexing import BATCH_SIZE, BuildSettings, build_index
-from repolore.store import EmbeddingCache, connect, index_model
+from repolore.indexing import MAX_BATCH, BuildSettings, build_index
+from repolore.store import EmbeddingCache, cache_key, connect, index_model
 
 
 def build(tmp_path: Path, chunks: list[Chunk], embedder: FakeEmbedder, name: str = "test") -> int:
@@ -42,13 +44,66 @@ def test_the_cache_is_shared_between_indexes(tmp_path: Path, corpus: list[Chunk]
     assert build(tmp_path, corpus, fake_embedder, name="experiment") == 0
 
 
-def test_many_chunks_are_embedded_in_batches(
+def same_length_chunks(make_document: DocumentFactory, count: int) -> list[Chunk]:
+    return [chunk for n in range(1, count + 1) for chunk in chunk_document(make_document(n, f"Text {n % 10}."))]
+
+
+def test_short_chunks_share_batches_up_to_the_cap(
     tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
 ) -> None:
-    chunks = [chunk for n in range(1, 2 * BATCH_SIZE + 2) for chunk in chunk_document(make_document(n, f"Text {n}."))]
+    chunks = same_length_chunks(make_document, 2 * MAX_BATCH + 1)
 
     assert build(tmp_path, chunks, fake_embedder) == len(chunks)
-    assert len(fake_embedder.embedded) == len(chunks)
+    assert [len(batch) for batch in fake_embedder.batches] == [MAX_BATCH, MAX_BATCH, 1]
+
+
+def test_a_batch_ends_before_its_padded_size_passes_the_budget(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chunks = same_length_chunks(make_document, 7)
+    [tokens] = fake_embedder.count_tokens([chunks[0].embedded_text])
+    monkeypatch.setattr(indexing, "TOKEN_BUDGET", 3 * tokens)
+
+    build(tmp_path, chunks, fake_embedder)
+
+    assert [len(batch) for batch in fake_embedder.batches] == [3, 3, 1]
+
+
+def test_a_chunk_over_the_budget_is_embedded_alone_after_shorter_ones(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    [long] = chunk_document(make_document(9, " ".join(["word"] * 100)))
+    short = same_length_chunks(make_document, 2)
+    monkeypatch.setattr(indexing, "TOKEN_BUDGET", 50)
+
+    build(tmp_path, [long, *short], fake_embedder)
+
+    first, second = fake_embedder.batches
+    assert sorted(first) == sorted(chunk.embedded_text for chunk in short)
+    assert second == [long.embedded_text]
+
+
+def test_each_chunk_keeps_its_own_vector_when_batches_reorder_them(
+    tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder
+) -> None:
+    build(tmp_path, list(reversed(corpus)), fake_embedder)
+
+    with closing(connect(tmp_path / "cache.db")) as db:
+        cached = EmbeddingCache(db)
+        for chunk in corpus:
+            key = cache_key(fake_embedder.model_id, chunk.embedded_text)
+            assert cached.get([key])[key].tolist() == fake_embedder.embed_query(chunk.embedded_text).tolist()
+
+
+class NoCountingEmbedder(FakeEmbedder):
+    def count_tokens(self, texts: Sequence[str]) -> list[int]:
+        raise AssertionError("nothing to embed, so nothing to count")
+
+
+def test_nothing_to_embed_counts_no_tokens(tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder) -> None:
+    build(tmp_path, corpus, fake_embedder)
+
+    assert build(tmp_path, corpus, NoCountingEmbedder()) == 0
 
 
 def test_empty_corpus_builds_an_empty_index(tmp_path: Path, fake_embedder: FakeEmbedder) -> None:

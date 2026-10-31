@@ -4,6 +4,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache, partial
+from itertools import batched
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -12,8 +13,9 @@ from repolore.embedding import Vectors
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
+    from tokenizers import Tokenizer
 
-BATCH_SIZE = 16
+COUNT_BATCH = 1024
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ class LocalEmbedder:
     def __init__(self, model: LocalModel = VOYAGE_NANO) -> None:
         self._spec = model
         self._model: SentenceTransformer | None = None
+        self._tokenizer: Tokenizer | None = None
         self._loading = threading.Lock()
 
     @property
@@ -79,8 +82,19 @@ class LocalEmbedder:
         return self._spec.dim
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
-        vectors = self._loaded().encode_document(list(texts), batch_size=BATCH_SIZE, normalize_embeddings=True)
+        batch = list(texts)
+        vectors = self._loaded().encode_document(batch, batch_size=max(len(batch), 1), normalize_embeddings=True)
         return np.asarray(vectors, dtype=np.float32)
+
+    def count_tokens(self, texts: Sequence[str]) -> list[int]:
+        """Tokens of each text before truncation, without the document prompt or special tokens."""
+        tokenizer = self._tokenizer_loaded()
+        # An encoding keeps ids, offsets and masks (about 100 bytes a token), so a whole corpus at once costs GBs.
+        return [
+            len(encoding.ids)
+            for part in batched(texts, COUNT_BATCH)
+            for encoding in tokenizer.encode_batch(list(part), add_special_tokens=False)
+        ]
 
     def embed_query(self, text: str) -> Vectors:
         return np.asarray(self._loaded().encode_query(text, normalize_embeddings=True), dtype=np.float32)
@@ -89,6 +103,18 @@ class LocalEmbedder:
         # The MCP server runs tool calls on worker threads; parallel first searches must not load the model twice.
         with self._loading:
             return self._load_once()
+
+    def _tokenizer_loaded(self) -> "Tokenizer":
+        with self._loading:
+            if self._tokenizer is None:
+                from tokenizers import Tokenizer
+
+                tokenizer = Tokenizer.from_file(_tokenizer_file(self._spec))
+                # Some tokenizer.json files carry the model's padding or truncation, which would distort counts.
+                tokenizer.no_padding()
+                tokenizer.no_truncation()
+                self._tokenizer = tokenizer
+            return self._tokenizer
 
     def _load_once(self) -> "SentenceTransformer":
         if self._model is None:
@@ -121,6 +147,13 @@ def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransforme
         with suppress(OSError):
             return load(local_files_only=True)
     return load()
+
+
+def _tokenizer_file(spec: LocalModel) -> str:
+    from huggingface_hub import hf_hub_download, try_to_load_from_cache
+
+    cached = try_to_load_from_cache(spec.name, "tokenizer.json", revision=spec.revision)
+    return cached if isinstance(cached, str) else hf_hub_download(spec.name, "tokenizer.json", revision=spec.revision)
 
 
 @cache

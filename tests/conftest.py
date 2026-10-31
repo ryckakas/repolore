@@ -21,10 +21,15 @@ class FakeEmbedder:
 
     def __init__(self) -> None:
         self.embedded: list[str] = []
+        self.batches: list[list[str]] = []
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
         self.embedded += texts
+        self.batches.append(list(texts))
         return np.stack([self._vector(text) for text in texts]) if texts else np.empty((0, FAKE_DIM), np.float32)
+
+    def count_tokens(self, texts: Sequence[str]) -> list[int]:
+        return [len(text.split()) for text in texts]
 
     def embed_query(self, text: str) -> Vectors:
         return self._vector(text)

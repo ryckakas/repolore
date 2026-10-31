@@ -118,7 +118,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   The default model is `voyage-4-nano` (1024 dimensions, pinned to a reviewed revision because it runs the
   model's own code); `bge-small` is the smaller alternative. An index records its model, and `embedder_for` picks
   the matching one for search. The embedding and reranking models load from the Hugging Face cache and go to the
-  Hub only to download a pinned revision that isn't cached yet. torch comes from PyTorch's CPU index
+  Hub only to download a pinned revision that isn't cached yet. `count_tokens` reads only the model's
+  `tokenizer.json` (no weights), and `build_index` uses it to batch by padded tokens, since a batch is padded to
+  its longest text. torch comes from PyTorch's CPU index
   (`[tool.uv.sources]`); PyPI's Linux wheel bundles gigabytes of CUDA.
 - `store.py` writes one SQLite file per index: `chunks`, a sqlite-vec `vec0` table filtered by repo,
   kind and author inside the KNN query, and an FTS5 table. `EmbeddingCache` (`<data-dir>/cache/embeddings.db`)
