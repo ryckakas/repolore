@@ -1,6 +1,6 @@
 [project]
 name = "repolore"
-version = "0.1.0"
+dynamic = ["version"]
 description = "RAG over your own engineering history on GitHub, with a CLI and an MCP server."
 readme = "README.md"
 authors = [
@@ -26,6 +26,9 @@ dependencies = [
 [tool.uv]
 # uv's own Python builds load SQLite extensions (sqlite-vec); some system builds, such as python.org's on macOS, can't.
 python-preference = "only-managed"
+# The version comes from git, so a new tag rebuilds the editable install. Keying on every commit too would reinstall
+# it after each commit, which fails on Windows while an MCP session holds .venv's scripts open.
+cache-keys = [{ file = "pyproject.toml" }, { git = { tags = true } }]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu" }]
@@ -40,8 +43,12 @@ repolore = "repolore.cli:app"
 repolore-mcp = "repolore.mcp_server:main"
 
 [build-system]
-requires = ["uv_build>=0.13.5,<0.14.0"]
-build-backend = "uv_build"
+# uv_build only takes a literal version; hatch-vcs derives it from the nearest vX.Y.Z tag and the commits since.
+requires = ["hatchling>=1.32.4,<2", "hatch-vcs>=0.5.0,<0.6"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
 
 [dependency-groups]
 dev = [
