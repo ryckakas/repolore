@@ -5,7 +5,7 @@ import random
 import sys
 import tomllib
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Annotated
@@ -31,6 +31,7 @@ from repolore.evals.harness import (
 )
 from repolore.evals.questions import QuestionKind, QuestionSet, load_questions
 from repolore.evals.runs import previous_run, run_record, save_run
+from repolore.hub import ModelUnavailableError
 from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
@@ -147,13 +148,18 @@ def ingest(
 
 
 @contextmanager
-def _github() -> Iterator[GitHubClient]:
+def _exit_on(*errors: type[Exception]) -> Generator[None]:
     try:
-        with closing(GitHubClient.connect(resolve_token())) as client:
-            yield client
-    except GitHubError as error:
+        yield
+    except errors as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
+
+
+@contextmanager
+def _github() -> Generator[GitHubClient]:
+    with _exit_on(GitHubError), closing(GitHubClient.connect(resolve_token())) as client:
+        yield client
 
 
 def _cached_documents(paths: AppPaths, include_bot_reviews: bool = False) -> list[Document]:
@@ -199,8 +205,9 @@ def inspect(
     model = ModelName.VOYAGE_NANO
     embedder = LocalEmbedder(MODELS[model])
     limit = chunk_limit(None, embedder.max_tokens)
-    chunks = [chunk for document in documents for chunk in chunk_document(document, limit, embedder.count_tokens)]
-    tokens = embedder.count_tokens([chunk.embedded_text for chunk in chunks])
+    with _exit_on(ModelUnavailableError):
+        chunks = [chunk for document in documents for chunk in chunk_document(document, limit, embedder.count_tokens)]
+        tokens = embedder.count_tokens([chunk.embedded_text for chunk in chunks])
     typer.echo(f"{len(documents)} documents, {len(chunks)} chunks")
     kinds = Counter(chunk.document.kind for chunk in chunks)
     for kind in DocumentKind:
@@ -232,6 +239,7 @@ SNIPPET_CHARS = 300
 IndexOption = Annotated[str, typer.Option("--db", help="Name of the index to use, one per pipeline config.")]
 ModeOption = Annotated[Mode, typer.Option(help="Vector (meaning), keyword (BM25) or hybrid (both, fused by rank).")]
 RerankOption = Annotated[bool, typer.Option(help="Rerank the top 50 candidates with a local cross-encoder.")]
+SEARCH_ERRORS = (StoreError, UnknownModelError, ModelUnavailableError)
 
 
 @app.command()
@@ -262,9 +270,14 @@ def build(
     model = LocalEmbedder(MODELS[settings.model])
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
     documents = _cached_documents(paths, settings.bot_reviews)
-    chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
+    with _exit_on(ModelUnavailableError):
+        chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
     typer.echo(_limit_note(limit, chunks))
-    with closing(connect(index_file)) as index, closing(connect(paths.embedding_cache)) as cache:
+    with (
+        _exit_on(ModelUnavailableError),
+        closing(connect(index_file)) as index,
+        closing(connect(paths.embedding_cache)) as cache,
+    ):
         changes = changed_settings(index, settings.meta() | {"model_id": model.model_id})
         if changes:
             details = ", ".join(f"{key}: {old} -> {new}" for key, (old, new) in changes.items())
@@ -303,14 +316,10 @@ def search(
     paths: AppPaths = ctx.obj
     index_file = _index_or_exit(paths, db)
     filters = Filters(repo=repo, kind=kind, author=author)
-    try:
-        with closing(connect(index_file)) as index:
-            reranker = CrossEncoderReranker() if rerank else None
-            embedder = embedder_for(index_model(index)[0])
-            hits = search_index(index, embedder, query, k, filters, mode, reranker, distinct=distinct)
-    except (StoreError, UnknownModelError) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(1) from None
+    with _exit_on(*SEARCH_ERRORS), closing(connect(index_file)) as index:
+        reranker = CrossEncoderReranker() if rerank else None
+        embedder = embedder_for(index_model(index)[0])
+        hits = search_index(index, embedder, query, k, filters, mode, reranker, distinct=distinct)
     if not hits:
         typer.echo("No matches.")
     for rank, hit in enumerate(hits, start=1):
@@ -340,19 +349,15 @@ def eval_(
     question_set = _questions_or_exit(questions_file)
     questions = [question for question in question_set.questions if question.holdout is holdout]
     index_file = _index_or_exit(paths, db)
-    try:
-        with closing(connect(index_file)) as index:
-            settings = index_settings(index)
-            embedder = embedder_for(settings["model_id"])
-            missing = {source.url for q in questions for source in q.expected} - indexed_urls(index)
-            chunks = sum(sum(kinds.values()) for kinds in repo_counts(index).values())
-            reranker = CrossEncoderReranker() if rerank else None
-            results = evaluate(
-                questions, lambda text: search_index(index, embedder, text, SEARCH_DEPTH, Filters(), mode, reranker)
-            )
-    except (StoreError, UnknownModelError) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(1) from None
+    with _exit_on(*SEARCH_ERRORS), closing(connect(index_file)) as index:
+        settings = index_settings(index)
+        embedder = embedder_for(settings["model_id"])
+        missing = {source.url for q in questions for source in q.expected} - indexed_urls(index)
+        chunks = sum(sum(kinds.values()) for kinds in repo_counts(index).values())
+        reranker = CrossEncoderReranker() if rerank else None
+        results = evaluate(
+            questions, lambda text: search_index(index, embedder, text, SEARCH_DEPTH, Filters(), mode, reranker)
+        )
     fingerprint = f"{hashlib.sha256(questions_file.read_bytes()).hexdigest()[:12]}:{'holdout' if holdout else 'tuning'}"
     config = {
         "index": db,

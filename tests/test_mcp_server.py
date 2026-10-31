@@ -10,6 +10,7 @@ from mcp.types import TextContent
 
 from repolore import mcp_server
 from repolore.chunking import Chunk, chunk_document
+from repolore.hub import ModelUnavailableError
 from repolore.mcp_server import TEXT_CHARS, create_server
 from repolore.store import connect, write_index
 
@@ -162,6 +163,22 @@ async def test_index_from_another_model_is_refused(
     assert result.is_error
     assert isinstance(result.content[0], TextContent)
     assert "rebuild it" in result.content[0].text
+
+
+async def test_a_model_it_cant_get_is_an_error_the_model_can_read(
+    index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(*_: object) -> None:
+        raise ModelUnavailableError("voyageai/voyage-4-nano isn't in the Hugging Face cache")
+
+    monkeypatch.setattr(FakeEmbedder, "embed_query", unavailable)
+
+    async with Client(create_server(index_file, lambda _: fake_embedder)) as client:
+        result = await client.call_tool("search", {"query": "x"})
+
+    assert result.is_error
+    assert isinstance(result.content[0], TextContent)
+    assert "voyageai/voyage-4-nano isn't in the Hugging Face cache" in result.content[0].text
 
 
 async def test_list_repos_counts_passages_per_kind(index_file: Path, fake_embedder: FakeEmbedder) -> None:

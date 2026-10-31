@@ -1,5 +1,5 @@
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Annotated
@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from repolore.documents import DocumentKind
 from repolore.embedding import Embedder
 from repolore.embedding.local import UnknownModelError, embedder_for
+from repolore.hub import ModelUnavailableError
 from repolore.paths import resolve_paths
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
@@ -81,7 +82,7 @@ def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> 
             try:
                 embedder = embedder_for(index_model(db)[0])
                 hits = search_index(db, embedder, query, k, Filters(repo=repo, kind=kind, author=author), mode)
-            except (StoreError, UnknownModelError) as error:
+            except (StoreError, UnknownModelError, ModelUnavailableError) as error:
                 raise ToolError(str(error)) from error
         return SearchResults(query=query, results=[_result(hit) for hit in hits])
 
@@ -99,7 +100,7 @@ def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> 
 
 
 @contextmanager
-def _open(index_file: Path) -> Iterator[sqlite3.Connection]:
+def _open(index_file: Path) -> Generator[sqlite3.Connection]:
     if not index_file.exists():
         raise ToolError(f"No index at {index_file}; run `repolore ingest` and `repolore build` first.")
     with closing(connect_read_only(index_file)) as db:

@@ -17,6 +17,7 @@ from repolore.config import Config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import Document
 from repolore.embedding.local import BGE_SMALL, LocalModel
+from repolore.hub import ModelUnavailableError
 from repolore.paths import resolve_paths
 from repolore.sources.github import GitHubClient, GitHubError
 from repolore.store import connect, index_settings
@@ -366,6 +367,49 @@ def test_search_refuses_an_index_from_another_model(cached_crashcause: Path, mon
     assert "rebuild it" in result.output
 
 
+UNAVAILABLE = "voyageai/voyage-4-nano (revision 5fb34e870f49) isn't in the Hugging Face cache"
+
+
+def model_unavailable(*_: object) -> None:
+    raise ModelUnavailableError(UNAVAILABLE)
+
+
+def test_search_with_a_model_it_cant_get_says_so_in_one_line(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.invoke(app, ["build"])
+    monkeypatch.setattr(FakeEmbedder, "embed_query", model_unavailable)
+
+    result = runner.invoke(app, ["search", "anything"])
+
+    assert result.exit_code == 1
+    assert result.output == f"{UNAVAILABLE}\n"
+
+
+@pytest.mark.parametrize("step", ["count_tokens", "embed_documents"])
+def test_build_with_a_model_it_cant_get_says_so_in_one_line(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    monkeypatch.setattr(FakeEmbedder, step, model_unavailable)
+
+    result = runner.invoke(app, ["build"])
+
+    assert result.exit_code == 1
+    assert result.output.splitlines()[-1] == UNAVAILABLE
+    assert "Traceback" not in result.output
+
+
+def test_inspect_with_a_tokenizer_it_cant_get_says_so_in_one_line(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(FakeEmbedder, "count_tokens", model_unavailable)
+
+    result = runner.invoke(app, ["inspect"])
+
+    assert result.exit_code == 1
+    assert result.output == f"{UNAVAILABLE}\n"
+
+
 EVAL_QUESTIONS = """
 questions:
   - id: runasnonroot
@@ -470,6 +514,17 @@ def test_eval_refuses_an_index_from_another_model(eval_questions: Path, monkeypa
 
     assert result.exit_code == 1
     assert "rebuild it" in result.output
+
+
+def test_eval_with_a_model_it_cant_get_says_so_in_one_line(
+    eval_questions: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(FakeEmbedder, "embed_query", model_unavailable)
+
+    result = runner.invoke(app, ["eval", "--file", str(eval_questions)])
+
+    assert result.exit_code == 1
+    assert result.output == f"{UNAVAILABLE}\n"
 
 
 def test_build_with_smaller_chunks_records_the_setting(cached_crashcause: Path) -> None:

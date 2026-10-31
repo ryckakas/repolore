@@ -5,6 +5,7 @@ from typing import Any, ClassVar
 import pytest
 
 from repolore import reranking
+from repolore.hub import ModelUnavailableError
 from repolore.reranking import CrossEncoderReranker
 from repolore.store import Hit
 
@@ -12,11 +13,14 @@ from repolore.store import Hit
 class StubCrossEncoder:
     loads: ClassVar[list[dict[str, Any]]] = []
     cached: ClassVar[bool] = True
+    hub_reachable: ClassVar[bool] = True
 
     def __init__(self, name: str, **kwargs: Any) -> None:
         StubCrossEncoder.loads.append({"name": name, **kwargs})
         if kwargs.get("local_files_only") and not StubCrossEncoder.cached:
             raise OSError("couldn't find them in the cached files")
+        if not kwargs.get("local_files_only") and not StubCrossEncoder.hub_reachable:
+            raise OSError("We couldn't connect to 'https://huggingface.co' to load the files")
 
     def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
         return [float(len(passage)) for _, passage in pairs]
@@ -26,6 +30,7 @@ class StubCrossEncoder:
 def stub_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
     StubCrossEncoder.loads = []
     StubCrossEncoder.cached = True
+    StubCrossEncoder.hub_reachable = True
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(CrossEncoder=StubCrossEncoder))
 
 
@@ -70,6 +75,14 @@ def test_a_model_missing_from_the_cache_is_downloaded() -> None:
     assert first["local_files_only"] is True
     assert "local_files_only" not in second
     assert {**second, "local_files_only": True} == first
+
+
+def test_a_model_neither_cached_nor_downloadable_says_how_to_get_it() -> None:
+    StubCrossEncoder.cached = False
+    StubCrossEncoder.hub_reachable = False
+
+    with pytest.raises(ModelUnavailableError, match=f"{reranking.MODEL} .* couldn't be downloaded"):
+        CrossEncoderReranker().rerank("q", [hit("a")])
 
 
 def test_no_candidates_needs_no_model() -> None:

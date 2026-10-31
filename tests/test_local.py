@@ -12,6 +12,7 @@ from tokenizers.pre_tokenizers import Whitespace
 
 from repolore.embedding import local
 from repolore.embedding.local import LocalEmbedder, UnknownModelError, embedder_for
+from repolore.hub import ModelUnavailableError
 
 
 class StubModel:
@@ -20,11 +21,14 @@ class StubModel:
     cache_lookups: ClassVar[list[tuple[str, str, str]]] = []
     modules_json_cached: ClassVar[bool] = True
     weights_cached: ClassVar[bool] = True
+    hub_reachable: ClassVar[bool] = True
 
     def __init__(self, name: str, **kwargs: Any) -> None:
         StubModel.loads.append({"name": name, **kwargs})
         if kwargs.get("local_files_only") and not StubModel.weights_cached:
             raise OSError("couldn't find them in the cached files")
+        if not kwargs.get("local_files_only") and not StubModel.hub_reachable:
+            raise OSError("We couldn't connect to 'https://huggingface.co' to load the files")
 
     @staticmethod
     def try_to_load_from_cache(repo_id: str, filename: str, revision: str) -> str | None:
@@ -47,6 +51,7 @@ def stub_sentence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
     StubModel.cache_lookups = []
     StubModel.modules_json_cached = True
     StubModel.weights_cached = True
+    StubModel.hub_reachable = True
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=StubModel))
     hub = types.SimpleNamespace(try_to_load_from_cache=StubModel.try_to_load_from_cache)
     monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
@@ -98,6 +103,15 @@ def test_a_snapshot_missing_other_files_is_downloaded() -> None:
     assert first["local_files_only"] is True
     assert "local_files_only" not in second
     assert {**second, "local_files_only": True} == first
+
+
+@pytest.mark.usefixtures("stub_sentence_transformers")
+def test_a_model_neither_cached_nor_downloadable_says_how_to_get_it() -> None:
+    StubModel.weights_cached = False
+    StubModel.hub_reachable = False
+
+    with pytest.raises(ModelUnavailableError, match=r"voyageai/voyage-4-nano \(revision 5fb34e870f49\) isn't in the"):
+        LocalEmbedder().embed_query("a")
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")
@@ -161,6 +175,7 @@ def test_a_recorded_model_is_named_whichever_revision_it_was_pinned_to() -> None
 class TinyHub:
     tokenizer_file: Path
     cached: bool = True
+    reachable: bool = True
     lookups: list[tuple[str, str, str]] = field(default_factory=list)
     downloads: list[tuple[str, str, str]] = field(default_factory=list)
 
@@ -170,6 +185,8 @@ class TinyHub:
 
     def hf_hub_download(self, repo_id: str, filename: str, revision: str) -> str:
         self.downloads.append((repo_id, filename, revision))
+        if not self.reachable:
+            raise OSError("An error happened while trying to locate the file on the Hub")
         return str(self.tokenizer_file)
 
 
@@ -198,6 +215,14 @@ def test_a_tokenizer_not_in_the_cache_is_downloaded_at_the_pinned_revision(tiny_
 
     assert LocalEmbedder(local.BGE_SMALL).count_tokens(["retry upload"]) == [2]
     assert tiny_hub.downloads == [("BAAI/bge-small-en-v1.5", "tokenizer.json", local.BGE_SMALL.revision)]
+
+
+def test_a_tokenizer_neither_cached_nor_downloadable_says_how_to_get_it(tiny_hub: TinyHub) -> None:
+    tiny_hub.cached = False
+    tiny_hub.reachable = False
+
+    with pytest.raises(ModelUnavailableError, match=r"BAAI/bge-small-en-v1\.5 .* locate the file on the Hub\. Run"):
+        LocalEmbedder(local.BGE_SMALL).count_tokens(["retry"])
 
 
 def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest.MonkeyPatch) -> None:
