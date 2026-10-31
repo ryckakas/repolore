@@ -89,7 +89,11 @@ def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> 
     def list_repos() -> Repos:
         """List the indexed repos and how many passages of each kind they have."""
         with _open(index_file) as db:
-            return Repos(repos=[Repo(repo=repo, chunks=chunks) for repo, chunks in repo_counts(db).items()])
+            try:
+                counts = repo_counts(db)
+            except StoreError as error:
+                raise ToolError(str(error)) from error
+        return Repos(repos=[Repo(repo=repo, chunks=chunks) for repo, chunks in counts.items()])
 
     return server
 

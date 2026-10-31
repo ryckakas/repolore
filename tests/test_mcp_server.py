@@ -135,6 +135,22 @@ async def test_missing_index_says_how_to_build_it(tmp_path: Path, fake_embedder:
     assert "run `repolore ingest` and `repolore build` first" in result.content[0].text
 
 
+@pytest.mark.parametrize(("tool", "arguments"), [("search", {"query": "x"}), ("list_repos", {})])
+async def test_empty_index_says_how_to_build_it(
+    tmp_path: Path, fake_embedder: FakeEmbedder, tool: str, arguments: dict[str, str]
+) -> None:
+    path = tmp_path / "empty.db"
+    with closing(connect(path)):
+        pass
+
+    async with Client(create_server(path, lambda _: fake_embedder)) as client:
+        result = await client.call_tool(tool, arguments)
+
+    assert result.is_error
+    assert isinstance(result.content[0], TextContent)
+    assert "The index is empty; run `repolore build` first." in result.content[0].text
+
+
 async def test_index_from_another_model_is_refused(
     index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
 ) -> None:
