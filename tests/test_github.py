@@ -229,7 +229,7 @@ def test_truncated_inner_connection_is_logged(caplog: pytest.LogCaptureFixture) 
         fetch_repo(client_for(fake.handle), "octo/repo")
 
     assert "octo/repo#4: only 0 of 120 files fetched" in caplog.text
-    assert ("octo/repo: files truncated to the first 0 (PRs affected: 2)", logging.INFO) in [
+    assert ("octo/repo: 2 of 2 fetched PRs had files truncated to the first 0", logging.INFO) in [
         (record.message, record.levelno) for record in caplog.records
     ]
     warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
@@ -237,6 +237,44 @@ def test_truncated_inner_connection_is_logged(caplog: pytest.LogCaptureFixture) 
         "octo/repo#4: only 0 of 2 comments fetched",
         "octo/repo#4: only 0 of 3 reviewThreads fetched",
     ]
+
+
+def github_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.message for record in caplog.records if record.name == github.__name__]
+
+
+def test_truncation_counts_only_the_prs_fetched_this_time(caplog: pytest.LogCaptureFixture) -> None:
+    old = pull(1, files=120, updated="2026-01-01T00:00:00Z")
+    old["comments"] = {"totalCount": 2, "nodes": []}
+    newest = pull(2, files=0, updated="2026-02-01T00:00:00Z")
+    cached = RawRepo(
+        info=INFO,
+        pulls=[old, pull(3, files=150, updated="2026-01-15T00:00:00Z"), newest],
+        issues=[],
+        commits=[],
+        docs=[],
+    )
+    fresh = [pull(4, files=130, updated="2026-03-01T00:00:00Z"), pull(5, updated="2026-02-15T00:00:00Z"), newest]
+    fake = FakeGitHub(RepoPullRequests=[page([*fresh, old])])
+
+    with caplog.at_level(logging.INFO):
+        raw = fetch_repo(client_for(fake.handle), "octo/repo", cached)
+
+    assert len(raw.pulls) == 5
+    assert github_messages(caplog) == ["octo/repo: 1 of 3 fetched PRs had files truncated to the first 0"]
+
+
+def test_nothing_fetched_logs_no_truncation(caplog: pytest.LogCaptureFixture) -> None:
+    cached = RawRepo(
+        info=INFO, pulls=[pull(1, files=120, updated="2026-01-01T00:00:00Z")], issues=[], commits=[], docs=[]
+    )
+    fake = FakeGitHub(RepoPullRequests=[page([pull(0, updated="2025-01-01T00:00:00Z")])])
+
+    with caplog.at_level(logging.DEBUG):
+        raw = fetch_repo(client_for(fake.handle), "octo/repo", cached)
+
+    assert [p["number"] for p in raw.pulls] == [1]
+    assert github_messages(caplog) == []
 
 
 def test_truncated_tree_is_logged(caplog: pytest.LogCaptureFixture) -> None:
