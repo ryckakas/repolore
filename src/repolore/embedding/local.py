@@ -53,6 +53,11 @@ class ModelName(StrEnum):
 MODELS = {ModelName.VOYAGE_NANO: VOYAGE_NANO, ModelName.BGE_SMALL: BGE_SMALL}
 
 
+def model_named_in(model_id: str) -> ModelName | None:
+    """The model a recorded id names, whichever revision it was pinned to then."""
+    return next((name for name, spec in MODELS.items() if model_id.startswith(f"{spec.name}@")), None)
+
+
 class UnknownModelError(Exception):
     pass
 

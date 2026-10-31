@@ -31,7 +31,7 @@ from repolore.evals.harness import (
 )
 from repolore.evals.questions import QuestionKind, QuestionSet, load_questions
 from repolore.evals.runs import previous_run, run_record, save_run
-from repolore.indexing import build_index
+from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
 from repolore.paths import AppPaths, resolve_paths
@@ -45,6 +45,7 @@ from repolore.store import (
     StoreError,
     changed_settings,
     connect,
+    connect_read_only,
     index_model,
     index_settings,
     indexed_urls,
@@ -228,31 +229,45 @@ def build(
     ctx: typer.Context,
     db: IndexOption = DEFAULT_INDEX,
     max_tokens: Annotated[
-        int | None, typer.Option(min=1, help="Split sections longer than this many tokens; by default they stay whole.")
+        int | None, typer.Option(min=0, help="Split sections longer than this many tokens; 0 keeps them whole.")
     ] = None,
-    embedder: Annotated[ModelName, typer.Option(help="Local embedding model.")] = ModelName.VOYAGE_NANO,
+    embedder: Annotated[ModelName | None, typer.Option(help="Local embedding model, voyage-4-nano at first.")] = None,
     bot_reviews: Annotated[
-        bool, typer.Option(help="Also index review threads started by bots such as CodeRabbit or Copilot.")
-    ] = False,
+        bool | None, typer.Option(help="Index review threads started by bots such as CodeRabbit or Copilot.")
+    ] = None,
 ) -> None:
-    """Chunk the cached documents, embed what changed and write the search index."""
+    """Chunk the cached documents, embed what changed and write the search index.
+
+    An option left out keeps the value the index was last built with.
+    """
     _log_progress()
     paths: AppPaths = ctx.obj
-    documents = _cached_documents(paths, bot_reviews)
-    chunks = [chunk for document in documents for chunk in chunk_document(document, max_tokens)]
     index_file = paths.index_file(db)
+    settings = _recorded_settings(index_file).overridden(max_tokens, bot_reviews, embedder)
+    typer.echo(f"Building with {settings}.")
+    documents = _cached_documents(paths, settings.bot_reviews)
+    chunks = [chunk for document in documents for chunk in chunk_document(document, settings.max_tokens)]
+    model = LocalEmbedder(MODELS[settings.model])
     with closing(connect(index_file)) as index, closing(connect(paths.embedding_cache)) as cache:
-        settings = {"max_tokens": str(max_tokens or "whole"), "bot_reviews": "included" if bot_reviews else "excluded"}
-        model = LocalEmbedder(MODELS[embedder])
-        changes = changed_settings(index, settings | {"model_id": model.model_id})
+        changes = changed_settings(index, settings.meta() | {"model_id": model.model_id})
         if changes:
             details = ", ".join(f"{key}: {old} -> {new}" for key, (old, new) in changes.items())
             typer.echo(f"Warning: build settings changed ({details}); chunks may be re-embedded.", err=True)
-        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings)
+        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings.meta())
     typer.echo(
         f"{stats.chunks} chunks indexed in {index_file}, {stats.embedded} embedded, "
         f"{stats.chunks - stats.embedded} reused"
     )
+
+
+def _recorded_settings(index_file: Path) -> BuildSettings:
+    if not index_file.exists():
+        return BuildSettings()
+    with closing(connect_read_only(index_file)) as index:
+        try:
+            return BuildSettings.recorded(index_settings(index))
+        except StoreError:
+            return BuildSettings()
 
 
 @app.command()

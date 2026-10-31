@@ -16,6 +16,7 @@ from repolore.cli import app
 from repolore.config import Config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import Document
+from repolore.embedding.local import BGE_SMALL, LocalModel
 from repolore.paths import resolve_paths
 from repolore.sources.github import GitHubClient, GitHubError
 from repolore.store import connect, index_settings
@@ -455,7 +456,7 @@ def test_build_with_smaller_chunks_records_the_setting(cached_crashcause: Path) 
     result = runner.invoke(app, ["build", "--db", "small", "--max-tokens", "50"])
 
     assert result.exit_code == 0
-    assert int(result.output.split(" chunks indexed")[0]) > 26
+    assert int(result.output.splitlines()[-1].split(" chunks indexed")[0]) > 26
     with closing(connect(cached_crashcause / "db" / "small.db")) as db:
         assert index_settings(db)["max_tokens"] == "50"
         assert index_settings(db)["bot_reviews"] == "excluded"
@@ -478,11 +479,81 @@ def test_rebuild_warns_when_recorded_settings_change(cached_crashcause: Path) ->
     assert unchanged.exit_code == 0
     assert "Warning: build settings changed" not in unchanged.output
 
-    changed = runner.invoke(app, ["build", "--db", "changes"])
+    changed = runner.invoke(app, ["build", "--db", "changes", "--max-tokens", "0", "--no-bot-reviews"])
     assert changed.exit_code == 0
     assert "max_tokens: 50 -> whole" in changed.output
     assert "bot_reviews: included -> excluded" in changed.output
     assert "chunks may be re-embedded" in changed.output
+
+
+def test_rebuild_without_options_keeps_the_recorded_settings(cached_crashcause: Path) -> None:
+    runner.invoke(app, ["build", "--db", "kept", "--max-tokens", "50", "--bot-reviews"])
+
+    result = runner.invoke(app, ["build", "--db", "kept"])
+
+    assert result.exit_code == 0
+    assert "Building with sections split at 50 tokens, bot reviews included, voyage-4-nano." in result.output
+    assert "Warning: build settings changed" not in result.output
+    assert "0 embedded" in result.output
+    with closing(connect(cached_crashcause / "db" / "kept.db")) as db:
+        assert (index_settings(db)["max_tokens"], index_settings(db)["bot_reviews"]) == ("50", "included")
+
+
+def test_rebuild_overrides_only_the_options_given(cached_crashcause: Path) -> None:
+    runner.invoke(app, ["build", "--db", "partly", "--max-tokens", "50", "--bot-reviews"])
+
+    result = runner.invoke(app, ["build", "--db", "partly", "--no-bot-reviews"])
+
+    assert result.exit_code == 0
+    assert "Building with sections split at 50 tokens, bot reviews excluded" in result.output
+    with closing(connect(cached_crashcause / "db" / "partly.db")) as db:
+        assert (index_settings(db)["max_tokens"], index_settings(db)["bot_reviews"]) == ("50", "excluded")
+
+
+def test_first_build_uses_the_defaults(cached_crashcause: Path) -> None:
+    result = runner.invoke(app, ["build", "--db", "fresh"])
+
+    assert result.exit_code == 0
+    assert "Building with whole sections, bot reviews excluded, voyage-4-nano." in result.output
+
+
+def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -> None:
+    (cached_crashcause / "db").mkdir()
+    (cached_crashcause / "db" / "empty.db").touch()
+
+    result = runner.invoke(app, ["build", "--db", "empty"])
+
+    assert result.exit_code == 0
+    assert "Building with whole sections, bot reviews excluded, voyage-4-nano." in result.output
+
+
+def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded: list[LocalModel] = []
+
+    def local_embedder(model: LocalModel) -> FakeEmbedder:
+        loaded.append(model)
+        embedder = FakeEmbedder()
+        embedder.model_id = model.model_id
+        return embedder
+
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", local_embedder)
+    runner.invoke(app, ["build", "--db", "small-model", "--embedder", "bge-small"])
+
+    result = runner.invoke(app, ["build", "--db", "small-model"])
+
+    assert loaded == [BGE_SMALL, BGE_SMALL]
+    assert "Building with whole sections, bot reviews excluded, bge-small." in result.output
+    assert "Warning: build settings changed" not in result.output
+
+
+def test_build_without_cached_documents_leaves_no_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = ingest_setup(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["build"])
+
+    assert result.exit_code == 1
+    assert "run `repolore ingest` first" in result.output
+    assert not (data_dir / "db" / "default.db").exists()
 
 
 def test_build_warns_when_embedding_model_changes(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:

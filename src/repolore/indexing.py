@@ -1,17 +1,57 @@
 import logging
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import batched
+from typing import Self
 
 import numpy as np
 
 from repolore.chunking import Chunk
 from repolore.embedding import Embedder, Vectors
+from repolore.embedding.local import ModelName, model_named_in
 from repolore.store import EmbeddingCache, cache_key, write_index
 
 BATCH_SIZE = 32
+WHOLE = "whole"
+INCLUDED = "included"
+EXCLUDED = "excluded"
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BuildSettings:
+    max_tokens: int | None = None
+    bot_reviews: bool = False
+    model: ModelName = ModelName.VOYAGE_NANO
+
+    @classmethod
+    def recorded(cls, meta: Mapping[str, str]) -> Self:
+        """The settings an index was built with; anything it doesn't record keeps the default."""
+        max_tokens = meta.get("max_tokens", WHOLE)
+        return cls(
+            max_tokens=None if max_tokens == WHOLE else int(max_tokens),
+            bot_reviews=meta.get("bot_reviews") == INCLUDED,
+            model=model_named_in(meta.get("model_id", "")) or cls.model,
+        )
+
+    def overridden(
+        self, max_tokens: int | None = None, bot_reviews: bool | None = None, model: ModelName | None = None
+    ) -> Self:
+        """These settings with every option that was given; a max_tokens of 0 means whole sections."""
+        return replace(
+            self,
+            max_tokens=self.max_tokens if max_tokens is None else (max_tokens or None),
+            bot_reviews=self.bot_reviews if bot_reviews is None else bot_reviews,
+            model=model or self.model,
+        )
+
+    def meta(self) -> dict[str, str]:
+        return {"max_tokens": str(self.max_tokens or WHOLE), "bot_reviews": INCLUDED if self.bot_reviews else EXCLUDED}
+
+    def __str__(self) -> str:
+        sections = f"sections split at {self.max_tokens} tokens" if self.max_tokens else "whole sections"
+        return f"{sections}, bot reviews {INCLUDED if self.bot_reviews else EXCLUDED}, {self.model}"
 
 
 @dataclass(frozen=True)
