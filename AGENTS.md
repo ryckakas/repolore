@@ -14,17 +14,19 @@ It is a **learning project first**: every stage (fetch, chunk, embed, retrieve, 
 evaluate) is written by hand so it stays visible. No LangChain, LlamaIndex, RAGAS or other
 RAG/eval frameworks. Prefer the approach that exposes how a stage works over one that hides it.
 
-It runs locally for a single user. Other people use it by running their own copy (`uvx` + `claude
-mcp add`) with their own GitHub token. No model API key is needed: embeddings run locally by default, and
-Voyage's hosted API is an option. There is no hosted service and no GitHub App.
+It runs locally for a single user. Other people use it by running their own copy (`uv tool install` from
+the git repo + `claude mcp add`, as in the README quickstart) with their own GitHub token. No model API key
+is needed: embeddings run locally. There is no hosted service and no GitHub App.
 
 ## Commands
 
 Python 3.12 (pinned in `.python-version`), managed with uv, which always uses its own Python build
 (`python-preference = "only-managed"`): some system builds, such as python.org's on macOS, can't load the
-sqlite-vec extension. Code that opens files always passes
+sqlite-vec extension. A tool install doesn't read the project's `[tool.uv]` settings, so the README's
+install command passes `--managed-python` itself; `[tool.uv.sources]` does apply, so it still gets the CPU torch.
+Code that opens files always passes
 `encoding="utf-8"`, because the Windows default cp1252 codec breaks on GitHub content. Don't lean on
-`PYTHONUTF8=1` instead: `uvx` users won't have it set, and CI's Windows job runs without it.
+`PYTHONUTF8=1` instead: installed users won't have it set, and CI's Windows job runs without it.
 
 ```sh
 uv sync                     # install the project and dev tools from uv.lock

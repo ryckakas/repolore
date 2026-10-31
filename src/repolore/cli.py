@@ -71,6 +71,11 @@ def _use_utf8_output() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
 
+def _log_progress() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 @app.command()
 def version(ctx: typer.Context) -> None:
     """Print the version and the resolved config and data paths."""
@@ -129,8 +134,7 @@ def ingest(
     full: Annotated[bool, typer.Option(help="Fetch everything again instead of only what changed.")] = False,
 ) -> None:
     """Fetch the discovered repos from GitHub into the raw cache and count the documents they yield."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    _log_progress()
     paths: AppPaths = ctx.obj
     if offline:
         documents = _cached_documents(paths)
@@ -232,7 +236,7 @@ def build(
     ] = False,
 ) -> None:
     """Chunk the cached documents, embed what changed and write the search index."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    _log_progress()
     paths: AppPaths = ctx.obj
     documents = _cached_documents(paths, bot_reviews)
     chunks = [chunk for document in documents for chunk in chunk_document(document, max_tokens)]

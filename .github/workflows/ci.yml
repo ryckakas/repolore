@@ -46,7 +46,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run pyright
 
-  # Windows is load-bearing rather than ceremony: it is the development machine and where `uvx`
+  # Windows is load-bearing rather than ceremony: it is the development machine and where installed
   # users run the CLI, and its default cp1252 codec is a known way to break on GitHub content.
   test:
     name: test (${{ matrix.os }})

@@ -136,6 +136,10 @@ Every expected source is within the top 10. The one top-5 miss follows the tunin
 answers the question well outranks the commit listed as its source. Four questions can't confirm or refute the
 tuning numbers; they show nothing broke.
 
+**Search time**, measured later by `repolore eval` on the default index, which had grown to 2,587 chunks once
+repo discovery added more repos: a median of 308 ms per question on a desktop CPU, query embedding included. The first search of a session is slower, because it loads the
+model.
+
 What would move the numbers next:
 
 - **Labels.** Several "misses" are valid answers that aren't listed as expected sources. Completing the labels would
