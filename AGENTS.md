@@ -78,6 +78,10 @@ deletion. The versioned hooks in `.githooks/` block direct commits and pushes to
 enable them once per clone with `git config core.hooksPath .githooks`. Work happens on
 `feat/…`, `fix/…`, `chore/…` or `docs/…` branches.
 
+The version comes from git through hatch-vcs, not from `pyproject.toml`. A release is a `vX.Y.Z` tag on `main`;
+any later commit builds as the next patch's dev version with its commit, such as `0.1.1.dev3+g1a2b3c4`, and
+uncommitted changes add a date. `repolore version` prints it, and the MCP server reports it to its client.
+
 ## Architecture
 
 The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. Its decision log

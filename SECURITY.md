@@ -11,9 +11,10 @@ Report it privately through GitHub:
 **[Report a vulnerability](https://github.com/ryckakas/repolore/security/advisories/new)**.
 Please don't open a public issue, pull request or discussion for it.
 
-A useful report says which version you ran, how you installed it, the command or MCP tool call,
-and what happened. The report stays private while it is investigated and fixed. Once a fixed
-release is out, the advisory is published with credit to you, unless you'd rather not be named.
+A useful report says which version you ran (`repolore version` prints it), how you installed it,
+the command or MCP tool call, and what happened. The report stays private while it is
+investigated and fixed. Once a fixed release is out, the advisory is published with credit to
+you, unless you'd rather not be named.
 
 ## What counts
 

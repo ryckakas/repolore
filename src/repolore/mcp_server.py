@@ -10,6 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
+from repolore import __version__
 from repolore.documents import DocumentKind
 from repolore.embedding import Embedder
 from repolore.embedding.local import UnknownModelError, embedder_for
@@ -60,7 +61,7 @@ class Repos(BaseModel):
 
 
 def create_server(index_file: Path, embedder_for: Callable[[str], Embedder]) -> MCPServer:
-    server = MCPServer("repolore", instructions=INSTRUCTIONS)
+    server = MCPServer("repolore", version=__version__, instructions=INSTRUCTIONS)
 
     @server.tool(annotations=READ_ONLY)
     def search(
