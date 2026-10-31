@@ -25,13 +25,27 @@ def search(
     filters: Filters,
     mode: Mode = Mode.VECTOR,
     reranker: Reranker | None = None,
+    distinct: bool = False,
 ) -> list[Hit]:
     model_id, _ = index_model(db)
     if model_id != embedder.model_id:
         raise StoreError(f"The index was built with {model_id}, not {embedder.model_id}; rebuild it.")
-    depth = max(k, CANDIDATES) if reranker else k
+    depth = max(k, CANDIDATES) if reranker or distinct else k
     hits = _candidates(db, embedder, query, depth, filters, mode)
-    return (reranker.rerank(query, hits) if reranker else hits)[:k]
+    ranked = reranker.rerank(query, hits) if reranker else hits
+    if distinct:
+        ranked = _distinct_sources(ranked)
+    return ranked[:k]
+
+
+def _distinct_sources(hits: list[Hit]) -> list[Hit]:
+    seen: set[str] = set()
+    distinct = []
+    for hit in hits:
+        if hit.url not in seen:
+            distinct.append(hit)
+            seen.add(hit.url)
+    return distinct
 
 
 def _candidates(

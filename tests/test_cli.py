@@ -299,6 +299,16 @@ def test_search_prints_ranked_hits_with_links(cached_crashcause: Path) -> None:
     assert "3. " not in result.output
 
 
+def test_search_distinct_limits_results_to_one_chunk_per_url(cached_crashcause: Path) -> None:
+    assert runner.invoke(app, ["build"]).exit_code == 0
+    result = runner.invoke(app, ["search", "security context", "-k", "10", "--distinct"])
+
+    assert result.exit_code == 0
+    urls = [line.strip() for line in result.output.splitlines() if line.strip().startswith("https://")]
+    assert urls
+    assert len(urls) == len(set(urls))
+
+
 def test_search_with_filters_that_match_nothing(cached_crashcause: Path) -> None:
     runner.invoke(app, ["build"])
 

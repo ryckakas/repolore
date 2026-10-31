@@ -256,6 +256,7 @@ def search(
     db: IndexOption = DEFAULT_INDEX,
     mode: ModeOption = Mode.VECTOR,
     rerank: RerankOption = False,
+    distinct: Annotated[bool, typer.Option(help="Return at most one chunk per source URL.")] = False,
 ) -> None:
     """Find the chunks that best match the query."""
     paths: AppPaths = ctx.obj
@@ -265,7 +266,7 @@ def search(
         with closing(connect(index_file)) as index:
             reranker = CrossEncoderReranker() if rerank else None
             embedder = embedder_for(index_model(index)[0])
-            hits = search_index(index, embedder, query, k, filters, mode, reranker)
+            hits = search_index(index, embedder, query, k, filters, mode, reranker, distinct=distinct)
     except (StoreError, UnknownModelError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
