@@ -179,6 +179,16 @@ def test_cached_repo_fetches_only_what_changed_since() -> None:
     assert fake.variables("DefaultBranchHistory")[0]["since"] == "2026-02-01T00:00:00Z"
 
 
+def test_a_cached_commit_fetched_again_keeps_its_cached_node() -> None:
+    boundary = commit("bbb", "2026-02-01T00:00:00Z") | {"associatedPullRequests": {"totalCount": 1}}
+    cached = RawRepo(info=INFO, pulls=[], issues=[], commits=[boundary], docs=[])
+    fake = FakeGitHub(DefaultBranchHistory=[page([commit("bbb", "2026-02-01T00:00:00Z")])])
+
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", cached)
+
+    assert raw.commits == [boundary]
+
+
 def test_cache_from_before_incremental_fetching_is_fetched_again() -> None:
     cached = RawRepo(info=INFO, pulls=[pull(9)], issues=[], commits=[{"oid": "old"}], docs=[])
     fake = FakeGitHub()

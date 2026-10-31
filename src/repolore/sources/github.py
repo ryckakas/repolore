@@ -283,12 +283,16 @@ def _fetch_updated(
 
 def _fetch_commits(client: GitHubClient, owner: str, name: str, cached: list[Json]) -> list[Json]:
     since = _watermark(cached, "committedDate")
+    kept = cached if since else []
+    # An oid fixes a commit's content, and a cached node may hold GitHub's PR answer, which history no longer asks for.
+    known = {node["oid"] for node in kept}
     fresh = [
         node
         for data in _pages(client, "DefaultBranchHistory", _history, owner=owner, name=name, since=since)
         for node in _history(data)["nodes"]
+        if node["oid"] not in known
     ]
-    return _merge(cached if since else [], fresh, "oid")
+    return [*kept, *fresh]
 
 
 def _watermark(cached: list[Json], field: str) -> str | None:

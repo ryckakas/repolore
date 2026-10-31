@@ -50,8 +50,16 @@ class CommitMessage(GitHubModel):
     message_body: str
 
 
+class PullCommitMessage(CommitMessage):
+    oid: str | None = None
+
+
 class PullRequestCommit(GitHubModel):
-    commit: CommitMessage
+    commit: PullCommitMessage
+
+
+class CommitId(GitHubModel):
+    oid: str
 
 
 class ChangedFile(GitHubModel):
@@ -65,6 +73,7 @@ class PullRequest(GitHubModel):
     url: str
     state: str
     created_at: datetime
+    merge_commit: CommitId | None = None
     author: Actor | None
     files: Nodes[ChangedFile]
     commits: Nodes[PullRequestCommit]
@@ -99,7 +108,7 @@ class Commit(CommitMessage):
     committed_date: datetime
     parents: Count
     author: GitActor
-    associated_pull_requests: Count
+    associated_pull_requests: Count | None = None
 
 
 class Branch(GitHubModel):

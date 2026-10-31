@@ -67,7 +67,7 @@ def documents_from(raw: RawRepo, include_bot_reviews: bool = False) -> list[Docu
         *_pull_documents(repo, pulls),
         *_review_documents(repo, pulls, include_bot_reviews),
         *_issue_documents(repo, (Issue.model_validate(issue) for issue in raw.issues)),
-        *_commit_documents(repo, (Commit.model_validate(commit) for commit in raw.commits)),
+        *_commit_documents(repo, (Commit.model_validate(commit) for commit in raw.commits), _pull_commit_oids(pulls)),
         *_doc_documents(repo, (DocFile.model_validate(doc) for doc in raw.docs)),
     ]
 
@@ -159,9 +159,19 @@ def _issue_documents(repo: RepoInfo, issues: Iterable[Issue]) -> Iterator[Docume
         )
 
 
-def _commit_documents(repo: RepoInfo, commits: Iterable[Commit]) -> Iterator[Document]:
+def _pull_commit_oids(pulls: Iterable[PullRequest]) -> set[str]:
+    """The oids of every PR's merge commit and commits, whatever the PR's state, as GitHub links commits to PRs."""
+    oids: set[str] = set()
+    for pull in pulls:
+        oids.update(node.commit.oid for node in pull.commits.nodes if node.commit.oid)
+        if pull.merge_commit:
+            oids.add(pull.merge_commit.oid)
+    return oids
+
+
+def _commit_documents(repo: RepoInfo, commits: Iterable[Commit], pull_commit_oids: set[str]) -> Iterator[Document]:
     for commit in commits:
-        if commit.parents.total_count > 1 or commit.associated_pull_requests.total_count or _is_bot_commit(commit):
+        if commit.parents.total_count > 1 or _came_from_a_pull(commit, pull_commit_oids) or _is_bot_commit(commit):
             continue
         headline, body = _rejoin_headline(commit.message_headline, commit.message_body)
         body, ai_assisted = _strip_claude_trailers(body)
@@ -176,6 +186,13 @@ def _commit_documents(repo: RepoInfo, commits: Iterable[Commit]) -> Iterator[Doc
             created_at=commit.committed_date,
             ai_assisted=ai_assisted,
         )
+
+
+def _came_from_a_pull(commit: Commit, pull_commit_oids: set[str]) -> bool:
+    # Commits cached while history still asked GitHub keep its answer; their PRs were cached without commit oids.
+    if commit.associated_pull_requests is not None:
+        return commit.associated_pull_requests.total_count > 0
+    return commit.oid in pull_commit_oids
 
 
 def _is_bot_commit(commit: Commit) -> bool:
