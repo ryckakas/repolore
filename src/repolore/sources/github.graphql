@@ -22,6 +22,15 @@ query ViewerRepositories($after: String) {
   }
 }
 
+query ViewerOrganizations($after: String) {
+  viewer {
+    organizations(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { login repositories { totalCount } }
+    }
+  }
+}
+
 query InvolvedRepositories($query: String!, $after: String) {
   search(query: $query, type: ISSUE, first: 100, after: $after) {
     issueCount

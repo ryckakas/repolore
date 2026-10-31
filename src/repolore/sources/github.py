@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, fields
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
@@ -162,10 +162,37 @@ def viewer_repositories(client: GitHubClient) -> tuple[str, list[ViewerRepo]]:
     return login, repos
 
 
-def involved_repositories(client: GitHubClient, login: str) -> list[str]:
+@dataclass(frozen=True)
+class ViewerOrg:
+    login: str
+    repo_count: int
+
+
+def viewer_organizations(client: GitHubClient) -> list[ViewerOrg]:
+    """The organizations the viewer is a member of, with how many of their repos the viewer can see."""
+    return [
+        ViewerOrg(node["login"], node["repositories"]["totalCount"])
+        for data in _pages(client, "ViewerOrganizations", lambda data: data["viewer"]["organizations"])
+        for node in data["viewer"]["organizations"]["nodes"]
+    ]
+
+
+def involved_repositories(client: GitHubClient, login: str, excluded_orgs: Iterable[str] = ()) -> list[str]:
     """Other people's repos with a PR or issue the viewer opened, commented on, reviewed or was assigned."""
+    exclusions = "".join(f" -org:{org}" for org in excluded_orgs)
+    return _searched_repositories(client, f"involves:{login} -user:{login}{exclusions}")
+
+
+def involved_repositories_among(client: GitHubClient, login: str, repos: list[str]) -> list[str]:
+    """The given repos that have a PR or issue the viewer took part in."""
+    if not repos:
+        return []
+    return _searched_repositories(client, " ".join([f"involves:{login}", *(f"repo:{repo}" for repo in repos)]))
+
+
+def _searched_repositories(client: GitHubClient, query: str) -> list[str]:
     names: dict[str, None] = {}
-    for data in _pages(client, "InvolvedRepositories", _search, query=f"involves:{login} -user:{login}"):
+    for data in _pages(client, "InvolvedRepositories", _search, query=query):
         if data["search"]["issueCount"] > SEARCH_LIMIT and not names:
             log.warning(
                 "search found %d PRs and issues, but only the first %d are listed",
