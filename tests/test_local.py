@@ -82,6 +82,37 @@ def test_model_is_loaded_once_pinned_and_in_float32() -> None:
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")
+@pytest.mark.parametrize(
+    ("use_gpu", "mps", "override", "device"),
+    [
+        (True, True, None, "mps"),
+        (True, False, None, "cpu"),
+        (True, True, "cpu", "cpu"),
+        (True, True, "", "mps"),
+        (True, False, "mps", "mps"),
+        (False, True, None, "cpu"),
+        (False, True, "mps", "cpu"),
+    ],
+)
+def test_the_gpu_is_used_only_when_asked_for_and_available(
+    monkeypatch: pytest.MonkeyPatch, use_gpu: bool, mps: bool, override: str | None, device: str
+) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: mps)
+    if override is None:
+        monkeypatch.delenv(local.DEVICE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(local.DEVICE_ENV, override)
+
+    LocalEmbedder(use_gpu=use_gpu).embed_documents(["a"])
+
+    [only] = StubModel.loads
+    assert only["device"] == device
+    assert only["model_kwargs"] == {"dtype": torch.float32}
+
+
+@pytest.mark.usefixtures("stub_sentence_transformers")
 def test_a_snapshot_without_modules_json_is_loaded_from_the_hub() -> None:
     StubModel.modules_json_cached = False
 

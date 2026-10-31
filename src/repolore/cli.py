@@ -270,7 +270,8 @@ def build(
     paths: AppPaths = ctx.obj
     index_file = paths.index_file(db)
     settings = _recorded_settings(index_file).overridden(max_tokens, bot_reviews, embedder)
-    model = LocalEmbedder(MODELS[settings.model])
+    # Only a build embeds enough to gain from the GPU; queries stay on the CPU, which the MCP server's threads share.
+    model = LocalEmbedder(MODELS[settings.model], use_gpu=True)
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
     typer.echo(f"Building with {settings.described(limit)}.")
     documents = _cached_documents(paths, settings.bot_reviews)
