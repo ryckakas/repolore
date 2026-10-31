@@ -43,6 +43,7 @@ from repolore.store import (
     EmbeddingCache,
     Filters,
     StoreError,
+    changed_settings,
     connect,
     index_model,
     index_settings,
@@ -238,7 +239,12 @@ def build(
     index_file = paths.index_file(db)
     with closing(connect(index_file)) as index, closing(connect(paths.embedding_cache)) as cache:
         settings = {"max_tokens": str(max_tokens or "whole"), "bot_reviews": "included" if bot_reviews else "excluded"}
-        stats = build_index(chunks, LocalEmbedder(MODELS[embedder]), index, EmbeddingCache(cache), settings)
+        model = LocalEmbedder(MODELS[embedder])
+        changes = changed_settings(index, settings | {"model_id": model.model_id})
+        if changes:
+            details = ", ".join(f"{key}: {old} -> {new}" for key, (old, new) in changes.items())
+            typer.echo(f"Warning: build settings changed ({details}); chunks may be re-embedded.", err=True)
+        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings)
     typer.echo(
         f"{stats.chunks} chunks indexed in {index_file}, {stats.embedded} embedded, "
         f"{stats.chunks - stats.embedded} reused"

@@ -13,6 +13,7 @@ from repolore.store import (
     Filters,
     StoreError,
     cache_key,
+    changed_settings,
     connect,
     index_model,
     index_settings,
@@ -165,3 +166,15 @@ def test_python_without_sqlite_extensions_gets_a_clear_error(tmp_path: Path, mon
         connect(tmp_path / "index.db")
 
     assert connection.closed
+
+
+def test_changed_settings_reports_only_existing_differences(index: sqlite3.Connection) -> None:
+    assert changed_settings(index, {"model_id": "other", "new": "value"}) == {
+        "model_id": ("fake-bag-of-words", "other")
+    }
+    assert changed_settings(index, {"model_id": "fake-bag-of-words"}) == {}
+
+
+def test_changed_settings_accepts_an_empty_index(tmp_path: Path) -> None:
+    with closing(connect(tmp_path / "empty.db")) as db:
+        assert changed_settings(db, {"model_id": "other"}) == {}

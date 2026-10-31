@@ -459,6 +459,30 @@ def test_build_with_bot_reviews_records_the_setting(cached_crashcause: Path) -> 
         assert index_settings(db)["bot_reviews"] == "included"
 
 
+def test_rebuild_warns_when_recorded_settings_change(cached_crashcause: Path) -> None:
+    first = runner.invoke(app, ["build", "--db", "changes", "--max-tokens", "50", "--bot-reviews"])
+    assert first.exit_code == 0
+    assert "Warning: build settings changed" not in first.output
+
+    unchanged = runner.invoke(app, ["build", "--db", "changes", "--max-tokens", "50", "--bot-reviews"])
+    assert unchanged.exit_code == 0
+    assert "Warning: build settings changed" not in unchanged.output
+
+    changed = runner.invoke(app, ["build", "--db", "changes"])
+    assert changed.exit_code == 0
+    assert "max_tokens: 50 -> whole" in changed.output
+    assert "bot_reviews: included -> excluded" in changed.output
+    assert "chunks may be re-embedded" in changed.output
+
+
+def test_build_warns_when_embedding_model_changes(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner.invoke(app, ["build", "--db", "model"])
+    monkeypatch.setattr(FakeEmbedder, "model_id", "other-model")
+    result = runner.invoke(app, ["build", "--db", "model"])
+    assert result.exit_code == 0
+    assert "model_id: fake-bag-of-words -> other-model" in result.output
+
+
 def test_eval_records_the_index_settings(eval_questions: Path, cached_crashcause: Path) -> None:
     runner.invoke(app, ["eval", "--file", str(eval_questions), "--mode", "hybrid"])
 

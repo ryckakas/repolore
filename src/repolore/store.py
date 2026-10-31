@@ -171,6 +171,14 @@ def index_model(db: sqlite3.Connection) -> tuple[str, int]:
     return meta["model_id"], int(meta["dim"])
 
 
+def changed_settings(db: sqlite3.Connection, settings: Mapping[str, str]) -> dict[str, tuple[str, str]]:
+    try:
+        previous = index_settings(db)
+    except StoreError:
+        return {}
+    return {key: (previous[key], value) for key, value in settings.items() if previous.get(key, value) != value}
+
+
 def index_settings(db: sqlite3.Connection) -> dict[str, str]:
     try:
         return dict(db.execute("select key, value from meta").fetchall())
