@@ -15,7 +15,7 @@ import yaml
 from pydantic import ValidationError
 
 from repolore import __version__
-from repolore.chunking import Chunk, chunk_document
+from repolore.chunking import Chunk, chunk_document, chunk_limit, count_split_sections
 from repolore.config import Config, load_config
 from repolore.discovery import discover
 from repolore.documents import Document, DocumentKind
@@ -183,7 +183,7 @@ def _print_counts(documents: list[Document]) -> None:
     typer.echo(f"{'total':<{width}}" + "".join(f"{totals[kind]:>8}" for kind in DocumentKind))
 
 
-TOKEN_BUCKETS = (50, 100, 200, 400, 800)
+TOKEN_BUCKETS = (50, 100, 200, 400, 800, 2048, 8192)
 BAR_WIDTH = 40
 SAMPLE_CHARS = 600
 
@@ -194,22 +194,32 @@ def inspect(
     samples: Annotated[int, typer.Option(help="How many random chunks to print.")] = 3,
     seed: Annotated[int | None, typer.Option(help="Seed for picking the samples, to see the same ones again.")] = None,
 ) -> None:
-    """Chunk the cached documents and show chunk counts, a token-length histogram and random samples."""
+    """Chunk the cached documents as a default build would, and show counts, a token histogram and random samples."""
     documents = _cached_documents(ctx.obj)
-    chunks = [chunk for document in documents for chunk in chunk_document(document)]
+    model = ModelName.VOYAGE_NANO
+    embedder = LocalEmbedder(MODELS[model])
+    limit = chunk_limit(None, embedder.max_tokens)
+    chunks = [chunk for document in documents for chunk in chunk_document(document, limit, embedder.count_tokens)]
+    tokens = embedder.count_tokens([chunk.embedded_text for chunk in chunks])
     typer.echo(f"{len(documents)} documents, {len(chunks)} chunks")
     kinds = Counter(chunk.document.kind for chunk in chunks)
     for kind in DocumentKind:
         typer.echo(f"  {kind:<8} {kinds[kind]:>6}")
-    _print_histogram(chunks)
-    for chunk in random.Random(seed).sample(chunks, min(samples, len(chunks))):
-        typer.echo(f"\n--- {chunk.id} ({chunk.tokens} tokens)\n{chunk.embedded_text[:SAMPLE_CHARS]}")
+    _print_histogram(tokens, model)
+    typer.echo(_limit_note(limit, chunks))
+    for index in random.Random(seed).sample(range(len(chunks)), min(samples, len(chunks))):
+        chunk = chunks[index]
+        typer.echo(f"\n--- {chunk.id} ({tokens[index]} tokens)\n{chunk.embedded_text[:SAMPLE_CHARS]}")
 
 
-def _print_histogram(chunks: list[Chunk]) -> None:
-    counts = Counter(next((bucket for bucket in TOKEN_BUCKETS if chunk.tokens <= bucket), None) for chunk in chunks)
+def _limit_note(limit: int, chunks: list[Chunk]) -> str:
+    return f"Chunks hold at most {limit} tokens; {count_split_sections(chunks)} sections were split to fit."
+
+
+def _print_histogram(tokens: list[int], model: ModelName) -> None:
+    counts = Counter(next((bucket for bucket in TOKEN_BUCKETS if count <= bucket), None) for count in tokens)
     largest = max(counts.values(), default=1)
-    typer.echo("tokens (estimated)")
+    typer.echo(f"tokens ({model})")
     lower = 0
     for bucket in [*TOKEN_BUCKETS, None]:
         label = f"{lower + 1}-{bucket}" if bucket else f">{lower}"
@@ -229,7 +239,11 @@ def build(
     ctx: typer.Context,
     db: IndexOption = DEFAULT_INDEX,
     max_tokens: Annotated[
-        int | None, typer.Option(min=0, help="Split sections longer than this many tokens; 0 keeps them whole.")
+        int | None,
+        typer.Option(
+            min=0,
+            help="Split sections longer than this many tokens; 0 goes back to the default, 8192 or the model's window.",
+        ),
     ] = None,
     embedder: Annotated[ModelName | None, typer.Option(help="Local embedding model, voyage-4-nano at first.")] = None,
     bot_reviews: Annotated[
@@ -245,9 +259,11 @@ def build(
     index_file = paths.index_file(db)
     settings = _recorded_settings(index_file).overridden(max_tokens, bot_reviews, embedder)
     typer.echo(f"Building with {settings}.")
-    documents = _cached_documents(paths, settings.bot_reviews)
-    chunks = [chunk for document in documents for chunk in chunk_document(document, settings.max_tokens)]
     model = LocalEmbedder(MODELS[settings.model])
+    limit = chunk_limit(settings.max_tokens, model.max_tokens)
+    documents = _cached_documents(paths, settings.bot_reviews)
+    chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
+    typer.echo(_limit_note(limit, chunks))
     with closing(connect(index_file)) as index, closing(connect(paths.embedding_cache)) as cache:
         changes = changed_settings(index, settings.meta() | {"model_id": model.model_id})
         if changes:

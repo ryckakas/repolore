@@ -108,10 +108,18 @@ line) but points the same way at 800 and whole sections. voyage-4-nano reads 32K
 nothing in truncation. Long sections are slow to embed on a CPU (the 41 not already cached took 10 minutes), but
 only when they change. Keep whole sections.
 
+*Later note (2026-10-31):* the caps in this experiment were estimated tokens (4 characters each), not the model's.
+The truncation claim held for this corpus but not for a larger one, where 2 whole sections passed 32K tokens and
+lost their tails (#17). Since then a chunk holds at most 8,192 real tokens by default (see "Ceiling" below).
+
 **5. A smaller embedding model.** Hypothesis: `BAAI/bge-small-en-v1.5` (33M parameters, 384 dimensions, a 512-token
 limit) is close enough to voyage-4-nano (340M, 1024 dimensions) to be worth its speed. Result: far worse on every
 metric (recall@5 -0.198, MRR -0.284); commit-only questions drop to 0.25. It embedded the whole corpus in 6.5 minutes
 on 4 threads, about 15 times faster, which doesn't make up for losing a third of the first-place hits. Drop.
+
+*Later note (2026-10-31):* this ran on 400-token chunks. A whole-section bge-small build would have been cut at its
+512-token limit without a word (7.1% of chunks on the 2026-10-31 corpus); chunks are now kept inside the model's
+window, so such a build splits those sections instead.
 
 **6. Contextual retrieval** (a model-written sentence of context per chunk) was skipped: it needs a model API key.
 
@@ -139,6 +147,13 @@ tuning numbers; they show nothing broke.
 **Search time**, measured later by `repolore eval` on the default index, which had grown to 2,587 chunks once
 repo discovery added more repos: a median of 308 ms per question on a desktop CPU, query embedding included. The first search of a session is slower, because it loads the
 model.
+
+**Ceiling (2026-10-31).** Chunks now hold at most 8,192 tokens by default, counted with the model's tokenizer (#17).
+On this corpus (now 1,431 documents, 3,309 chunks, the largest 2,903 tokens) no section reaches that, so the chunks
+came out identical to whole sections, checked text by text, and nothing was re-embedded. The eval on that index:
+recall@5 0.865, recall@10 0.919, MRR 0.814, nDCG@10 0.809, against 0.810 on the previous, smaller index; the
+difference comes from the corpus having grown, not from the ceiling. Search took a median of 195 ms over 3,309
+chunks. The ceiling's effect on very long sections is still unmeasured here: it needs a corpus that has them.
 
 What would move the numbers next:
 

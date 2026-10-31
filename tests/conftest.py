@@ -18,6 +18,7 @@ class FakeEmbedder:
 
     model_id = "fake-bag-of-words"
     dim = FAKE_DIM
+    max_tokens = 10_000
 
     def __init__(self) -> None:
         self.embedded: list[str] = []

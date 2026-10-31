@@ -14,6 +14,11 @@ class Embedder(Protocol):
     @property
     def dim(self) -> int: ...
 
+    @property
+    def max_tokens(self) -> int:
+        """The most text tokens the model reads in one document; the rest would be cut."""
+        ...
+
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
         """Vectors for the texts in one forward pass: the caller decides what fits in a batch."""
         ...

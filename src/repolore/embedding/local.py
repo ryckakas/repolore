@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from tokenizers import Tokenizer
 
 COUNT_BATCH = 1024
+PROMPT_MARGIN = 16
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class LocalModel:
     name: str
     revision: str
     dim: int
+    max_seq_length: int
     trust_remote_code: bool = False
     prompts: dict[str, str] = field(default_factory=dict)
 
@@ -36,12 +38,14 @@ VOYAGE_NANO = LocalModel(
     # The model runs its own code (trust_remote_code), so it is pinned to a reviewed commit.
     revision="5fb34e870f49f19e79c94d5e118f5ee730133279",
     dim=1024,
+    max_seq_length=32_768,
     trust_remote_code=True,
 )
 BGE_SMALL = LocalModel(
     name="BAAI/bge-small-en-v1.5",
     revision="5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
     dim=384,
+    max_seq_length=512,
     # The model card's query instruction; the checkpoint doesn't ship it as a saved prompt.
     prompts={"query": "Represent this sentence for searching relevant passages: "},
 )
@@ -80,6 +84,11 @@ class LocalEmbedder:
     @property
     def dim(self) -> int:
         return self._spec.dim
+
+    @property
+    def max_tokens(self) -> int:
+        # Room for the document prompt (7 tokens for voyage-4-nano) and special tokens (2 for bge-small).
+        return self._spec.max_seq_length - PROMPT_MARGIN
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
         batch = list(texts)

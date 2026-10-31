@@ -204,3 +204,8 @@ def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest
     monkeypatch.setattr(local, "COUNT_BATCH", 2)
 
     assert LocalEmbedder().count_tokens(["retry", "retry upload", "a b c", "", "upload"]) == [1, 2, 3, 0, 1]
+
+
+def test_the_window_leaves_room_for_the_prompt() -> None:
+    assert LocalEmbedder().max_tokens == 32_768 - local.PROMPT_MARGIN
+    assert LocalEmbedder(local.BGE_SMALL).max_tokens == 512 - local.PROMPT_MARGIN

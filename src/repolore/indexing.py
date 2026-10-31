@@ -38,7 +38,7 @@ class BuildSettings:
     def overridden(
         self, max_tokens: int | None = None, bot_reviews: bool | None = None, model: ModelName | None = None
     ) -> Self:
-        """These settings with every option that was given; a max_tokens of 0 means whole sections."""
+        """These settings with every option that was given; a max_tokens of 0 means the default limit."""
         return replace(
             self,
             max_tokens=self.max_tokens if max_tokens is None else (max_tokens or None),
