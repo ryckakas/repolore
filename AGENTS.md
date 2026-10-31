@@ -140,7 +140,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   is padded to its longest text. torch comes from PyTorch's CPU index (`[tool.uv.sources]`); PyPI's Linux wheel
   bundles gigabytes of CUDA.
 - `store.py` writes one SQLite file per index: `chunks`, a sqlite-vec `vec0` table filtered by repo,
-  kind and author inside the KNN query, and an FTS5 table. `EmbeddingCache` (`<data-dir>/cache/embeddings.db`)
+  kind and author inside the KNN query, and an FTS5 table. An index is in WAL mode and rewritten in one transaction,
+  so a search during a build reads the previous index until it commits; with a rollback journal, readers are locked
+  out once the writer spills its cache. `EmbeddingCache` (`<data-dir>/cache/embeddings.db`)
   keys vectors by model and chunk text, so every index reuses them and a rebuild embeds only changed chunks.
 - `indexing.py` builds an index. `retrieval.py` searches one in `vector`, `keyword` (FTS5 BM25) or `hybrid` mode
   (reciprocal rank fusion), optionally reranked by `reranking.py`'s local cross-encoder. The defaults (vector,
