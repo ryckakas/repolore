@@ -208,14 +208,15 @@ def fetch_repo(client: GitHubClient, repo: str, cached: RawRepo | None = None) -
     owner, name = repo.split("/")
     info = _repo_info(client, repo)
     branch = (info["defaultBranchRef"] or {}).get("name")
-    pulls = _fetch_updated(
+    pulls, fetched_pulls = _fetch_updated(
         client, "RepoPullRequests", "pullRequests", cached.pulls if cached else [], owner=owner, name=name
     )
-    _log_truncation(repo, pulls)
+    _log_truncation(repo, fetched_pulls)
+    issues, _ = _fetch_updated(client, "RepoIssues", "issues", cached.issues if cached else [], owner=owner, name=name)
     return RawRepo(
         info=info,
         pulls=pulls,
-        issues=_fetch_updated(client, "RepoIssues", "issues", cached.issues if cached else [], owner=owner, name=name),
+        issues=issues,
         commits=_fetch_commits(client, owner, name, cached.commits if cached else []) if branch else [],
         docs=_fetch_docs(client, repo, branch, cached.docs if cached else []) if branch else [],
     )
@@ -266,7 +267,8 @@ def _history(data: Json) -> Json:
 
 def _fetch_updated(
     client: GitHubClient, operation: str, connection: str, cached: list[Json], **variables: Any
-) -> list[Json]:
+) -> tuple[list[Json], list[Json]]:
+    """The cached nodes updated with what changed, and the nodes fetched this time."""
     # Pages come newest-updated first, so everything after the first older node is already cached.
     watermark = _watermark(cached, "updatedAt")
     fresh: list[Json] = []
@@ -276,7 +278,7 @@ def _fetch_updated(
         fresh += newer
         if len(newer) < len(nodes):
             break
-    return _merge(cached if watermark else [], fresh, "number")
+    return _merge(cached if watermark else [], fresh, "number"), fresh
 
 
 def _fetch_commits(client: GitHubClient, owner: str, name: str, cached: list[Json]) -> list[Json]:
@@ -314,7 +316,7 @@ def _log_truncation(repo: str, pulls: list[Json]) -> None:
                 log.debug("%s#%s: only %d of %d %s fetched", repo, pull["number"], fetched, total, key)
                 summaries[key, fetched] += 1
     for (key, fetched), count in summaries.items():
-        log.info("%s: %s truncated to the first %d (PRs affected: %d)", repo, key, fetched, count)
+        log.info("%s: %d of %d fetched PRs had %s truncated to the first %d", repo, count, len(pulls), key, fetched)
 
 
 def _fetch_docs(client: GitHubClient, repo: str, branch: str, cached: list[Json]) -> list[Json]:
