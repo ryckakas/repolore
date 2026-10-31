@@ -15,6 +15,7 @@ from repolore.store import (
     cache_key,
     changed_settings,
     connect,
+    connect_read_only,
     index_model,
     index_settings,
     keyword_matches,
@@ -94,6 +95,50 @@ def test_rewriting_replaces_the_previous_index(
     write_index(index, corpus[:1], fake_embedder.embed_documents([corpus[0].embedded_text]), "fake-bag-of-words", 64)
 
     assert search(index, fake_embedder, "registry") == ["https://github.com/octo/repo/pull/1"]
+
+
+def test_a_failed_rewrite_keeps_the_previous_index(
+    index: sqlite3.Connection, corpus: list[Chunk], fake_embedder: FakeEmbedder
+) -> None:
+    one_vector_short = fake_embedder.embed_documents([chunk.embedded_text for chunk in corpus[:-1]])
+
+    with pytest.raises(ValueError, match="shorter"):
+        write_index(index, corpus, one_vector_short, "new-model", 64)
+
+    assert index_model(index) == ("fake-bag-of-words", 64)
+    assert len(search(index, fake_embedder, "anything", k=50)) == 4
+
+
+class ChunksReadMidway(list[Chunk]):
+    """Chunks that, once the rewrite starts inserting them, look at the index from a reader's connection."""
+
+    def __init__(self, chunks: list[Chunk], path: Path) -> None:
+        super().__init__(chunks)
+        self.path = path
+        self.seen: list[tuple[str, int]] = []
+
+    def __iter__(self) -> Iterator[Chunk]:
+        for chunk in super().__iter__():
+            yield chunk
+            with closing(connect_read_only(self.path)) as reader:
+                self.seen.append((index_model(reader)[0], reader.execute("select count(*) from chunks").fetchone()[0]))
+
+
+def test_a_reader_sees_the_previous_index_until_the_rewrite_commits(
+    tmp_path: Path, index: sqlite3.Connection, corpus: list[Chunk], fake_embedder: FakeEmbedder
+) -> None:
+    chunks = ChunksReadMidway(corpus[:2], tmp_path / "db" / "test.db")
+
+    vectors = fake_embedder.embed_documents([chunk.embedded_text for chunk in corpus[:2]])
+
+    write_index(index, chunks, vectors, "new-model", 64)
+
+    assert chunks.seen == [("fake-bag-of-words", 4), ("fake-bag-of-words", 4)]
+    assert index.execute("pragma journal_mode").fetchone() == ("wal",)
+    assert chunks.path.with_name("test.db-wal").stat().st_size == 0
+    with closing(connect_read_only(chunks.path)) as reader:
+        assert index_model(reader) == ("new-model", 64)
+        assert repo_counts(reader) == {"octo/repo": {"pr": 1}, "octo/charts": {"pr": 1}}
 
 
 def test_keyword_index_keeps_snake_case_words_whole(index: sqlite3.Connection) -> None:

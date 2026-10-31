@@ -130,15 +130,19 @@ def write_index(
     dim: int,
     settings: Mapping[str, str] | None = None,
 ) -> None:
+    # In WAL mode readers keep the old index until the rewrite commits; a rollback journal locks them out once the
+    # writer spills its cache. executescript commits an open transaction, so the transaction begins inside it.
+    db.execute("pragma journal_mode=wal")
     with db:
-        for table in TABLES:
-            db.execute(f"drop table if exists {table}")
-        db.executescript(SCHEMA.format(dim=dim))
+        drops = "".join(f"drop table if exists {table};" for table in TABLES)
+        db.executescript(f"begin immediate;{drops}{SCHEMA.format(dim=dim)}")
         meta = {**(settings or {}), "model_id": model_id, "dim": str(dim)}
         db.executemany("insert into meta (key, value) values (?, ?)", meta.items())
         for rowid, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True), start=1):
             _insert_chunk(db, rowid, chunk, vector)
         db.execute("insert into chunks_fts (chunks_fts) values ('rebuild')")
+    # The log holds the whole rewrite, and readers alone never shrink it.
+    db.execute("pragma wal_checkpoint(truncate)")
 
 
 def _insert_chunk(db: sqlite3.Connection, rowid: int, chunk: Chunk, vector: Vectors) -> None:
