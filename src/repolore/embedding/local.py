@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from repolore.embedding import Vectors
+from repolore.hub import downloading
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -155,14 +156,18 @@ def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransforme
     if isinstance(try_to_load_from_cache(spec.name, "modules.json", revision=spec.revision), str):
         with suppress(OSError):
             return load(local_files_only=True)
-    return load()
+    with downloading(spec.name, spec.revision):
+        return load()
 
 
 def _tokenizer_file(spec: LocalModel) -> str:
     from huggingface_hub import hf_hub_download, try_to_load_from_cache
 
     cached = try_to_load_from_cache(spec.name, "tokenizer.json", revision=spec.revision)
-    return cached if isinstance(cached, str) else hf_hub_download(spec.name, "tokenizer.json", revision=spec.revision)
+    if isinstance(cached, str):
+        return cached
+    with downloading(spec.name, spec.revision):
+        return hf_hub_download(spec.name, "tokenizer.json", revision=spec.revision)
 
 
 @cache

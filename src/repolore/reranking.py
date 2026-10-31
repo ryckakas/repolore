@@ -4,6 +4,7 @@ from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
+from repolore.hub import downloading
 from repolore.store import Hit
 
 if TYPE_CHECKING:
@@ -43,5 +44,6 @@ class CrossEncoderReranker:
                 try:
                     self._model = load(local_files_only=True)
                 except OSError:
-                    self._model = load()
+                    with downloading(MODEL, REVISION):
+                        self._model = load()
             return self._model
