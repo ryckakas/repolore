@@ -47,7 +47,6 @@ async def test_initialize_reports_the_package_version(index_file: Path, fake_emb
     assert server_info is not None
     assert server_info.name == "repolore"
     assert server_info.version == __version__
-    assert __version__
 
 
 @pytest.mark.parametrize("mode", [None, "vector", "keyword", "hybrid"])

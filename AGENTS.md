@@ -80,7 +80,9 @@ enable them once per clone with `git config core.hooksPath .githooks`. Work happ
 
 The version comes from git through hatch-vcs, not from `pyproject.toml`. A release is a `vX.Y.Z` tag on `main`;
 any later commit builds as the next patch's dev version with its commit, such as `0.1.1.dev3+g1a2b3c4`, and
-uncommitted changes add a date. `repolore version` prints it, and the MCP server reports it to its client.
+uncommitted changes add a date. Every tag must be a version: a tag hatch-vcs can't parse fails the build.
+`repolore version` prints the version, and the MCP server reports it to its client. The local editable install only
+rebuilds when tags change, so its version can lag behind the checked-out commit.
 
 ## Architecture
 
@@ -158,7 +160,8 @@ Nothing is async: the MCP SDK runs the plain `def` tools on worker threads, and 
 synchronous on purpose. `LocalEmbedder` locks its lazy model load because those threads can search in parallel.
 
 While a Claude Code session runs the server, files in `.venv` are open, and `uv sync` / `uv add` can fail with
-"Access is denied". Disable the server in `/mcp` or close those sessions before changing dependencies.
+"Access is denied". Disable the server in `/mcp` or close those sessions before changing dependencies or adding a
+tag, since a new tag reinstalls the editable package.
 
 ## Comments
 

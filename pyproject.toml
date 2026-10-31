@@ -26,8 +26,9 @@ dependencies = [
 [tool.uv]
 # uv's own Python builds load SQLite extensions (sqlite-vec); some system builds, such as python.org's on macOS, can't.
 python-preference = "only-managed"
-# The version comes from git, so a new commit or tag has to rebuild the editable install for __version__ to follow.
-cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
+# The version comes from git, so a new tag rebuilds the editable install. Keying on every commit too would reinstall
+# it after each commit, which fails on Windows while an MCP session holds .venv's scripts open.
+cache-keys = [{ file = "pyproject.toml" }, { git = { tags = true } }]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu" }]
