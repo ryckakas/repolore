@@ -14,11 +14,14 @@ from repolore.sources.github import (
     GitHubClient,
     GitHubError,
     RawRepo,
+    ViewerOrg,
     ViewerRepo,
     fetch_contributions,
     fetch_repo,
     involved_repositories,
+    involved_repositories_among,
     resolve_token,
+    viewer_organizations,
     viewer_repositories,
 )
 
@@ -112,6 +115,8 @@ def _wrap(operation: str, connection: Json) -> Json:
             return {"repository": {"defaultBranchRef": {"target": {"history": connection}}}}
         case "ViewerRepositories":
             return {"viewer": {"login": "octocat", "repositories": connection}}
+        case "ViewerOrganizations":
+            return {"viewer": {"organizations": connection}}
         case _:
             return {"search": connection}
 
@@ -270,6 +275,43 @@ def test_involved_repositories_are_listed_once(caplog: pytest.LogCaptureFixture)
     assert names == ["other/a", "other/b"]
     assert fake.variables("InvolvedRepositories")[0]["query"] == "involves:octocat -user:octocat"
     assert "only the first" not in caplog.text
+
+
+def test_viewer_organizations_are_paginated_with_their_repo_counts() -> None:
+    first = page([{"login": "octo-org", "repositories": {"totalCount": 12}}], after="next")
+    second = page([{"login": "Big-Co", "repositories": {"totalCount": 0}}])
+    fake = FakeGitHub(ViewerOrganizations=[first, second])
+
+    assert viewer_organizations(client_for(fake.handle)) == [ViewerOrg("octo-org", 12), ViewerOrg("Big-Co", 0)]
+
+
+def test_involved_repositories_among_no_repos_searches_nothing() -> None:
+    fake = FakeGitHub()
+
+    assert involved_repositories_among(client_for(fake.handle), "octocat", []) == []
+    assert fake.requests == []
+
+
+def test_involved_repositories_leave_out_excluded_orgs() -> None:
+    fake = FakeGitHub(InvolvedRepositories=[page([]) | {"issueCount": 0}])
+
+    involved_repositories(client_for(fake.handle), "octocat", ["octo-org", "Big-Co"])
+
+    assert (
+        fake.variables("InvolvedRepositories")[0]["query"] == "involves:octocat -user:octocat -org:octo-org -org:Big-Co"
+    )
+
+
+def test_involved_repositories_among_search_only_those_repos() -> None:
+    nodes = [{"repository": {"nameWithOwner": "octo-org/fork"}}]
+    fake = FakeGitHub(InvolvedRepositories=[page(nodes) | {"issueCount": 1}])
+
+    names = involved_repositories_among(client_for(fake.handle), "octocat", ["octo-org/fork", "octo-org/other"])
+
+    assert names == ["octo-org/fork"]
+    assert (
+        fake.variables("InvolvedRepositories")[0]["query"] == "involves:octocat repo:octo-org/fork repo:octo-org/other"
+    )
 
 
 def test_involved_repositories_beyond_the_search_limit_are_logged(caplog: pytest.LogCaptureFixture) -> None:

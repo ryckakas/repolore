@@ -92,8 +92,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
 - `discovery.py` decides what to ingest. Repos the viewer owns or reads as a collaborator or org member (forks
   skipped) are fetched whole. Other people's repos found by an `involves:<login>` search are fetched only for the
   viewer's PRs and issues; `repositoriesContributedTo` is not used, because it misses PRs the viewer only commented
-  on. Checkouts directly under `local_roots` that have a `.plans/` folder add their plans, matched to a repo by the
-  `origin` remote, and stay in as plans-only when the repo itself is gone.
+  on. The search leaves out each org whose every visible repo is in the viewer's repo list (forks included), so its
+  PRs don't fill the search's 1,000 results; forks in those orgs get a search of their own. Private memberships need
+  `read:org`; orgs that can't be read stay in the search. Checkouts directly under `local_roots` that have a `.plans/`
+  folder add their plans, matched to a repo by the `origin` remote, and stay in as plans-only when the repo itself is
+  gone.
 - `sources/` fetches GitHub data with a sync `httpx` client: GraphQL for PRs, issues, commits, discovery and
   contributions (`github.graphql`), REST for the markdown tree and blobs. `models.py` types the responses. The
   client waits for the rate limit to reset when fewer than 100 points are left, and retries a rate-limited request.
