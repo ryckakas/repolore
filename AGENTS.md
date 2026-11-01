@@ -162,7 +162,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   latency is measured at a given corpus size. `EXPERIMENTS.md` logs every retrieval experiment, aggregate numbers only.
 - `mcp_server.py` serves `search`, `list_repos` and `refresh` to Claude Code over stdio (`repolore-mcp`, official
   `mcp` SDK v2 with `MCPServer`; the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so
-  `repolore build` can rewrite it meanwhile, and loads the model on the first search (about a minute here).
+  `repolore build` can rewrite it meanwhile. It loads the index's model on a background thread at start (about
+  35 s warm here, mostly importing transformers), so the first search finds it ready or waits on
+  `LocalEmbedder`'s load lock; `--no-preload` defers the load to the first search.
   `list_repos` also returns the index's `built_at` and the last refresh's status. Never print to stdout in code the
   server runs: stdout carries the protocol.
 - `refresh.py` runs one refresh at a time. `repolore refresh` holds an OS file lock (`<data-dir>/refresh.lock`, via

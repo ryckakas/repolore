@@ -12,8 +12,9 @@ from mcp.types import TextContent
 
 from repolore import __version__, mcp_server
 from repolore.chunking import Chunk, chunk_document
+from repolore.embedding.local import UnknownModelError
 from repolore.hub import ModelUnavailableError
-from repolore.mcp_server import TEXT_CHARS, create_server
+from repolore.mcp_server import TEXT_CHARS, create_server, preload
 from repolore.paths import AppPaths
 from repolore.refresh import refreshing
 from repolore.store import connect, write_index
@@ -263,8 +264,12 @@ async def test_server_speaks_mcp_over_stdio(index_file: Path) -> None:
     assert [repo["repo"] for repo in result.structured_content["repos"]] == ["octo/charts", "octo/repo"]
 
 
-def test_main_serves_the_named_index_from_the_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("options", "preloads"), [([], 1), (["--preload"], 1), (["--no-preload"], 0)])
+def test_main_serves_the_named_index_from_the_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: list[str], preloads: int
+) -> None:
     served: list[Path] = []
+    preloaded: list[Path] = []
 
     class StubServer:
         def __init__(self, paths: AppPaths, db_name: str) -> None:
@@ -274,13 +279,51 @@ def test_main_serves_the_named_index_from_the_data_dir(tmp_path: Path, monkeypat
             served.append(self.index_file)
 
     monkeypatch.setattr(mcp_server, "create_server", lambda paths, db_name, _: StubServer(paths, db_name))
-    monkeypatch.setattr(sys, "argv", ["repolore-mcp", "--data-dir", str(tmp_path), "--db", "experiment"])
+    monkeypatch.setattr(mcp_server, "preload", lambda index_file, _: preloaded.append(index_file))
+    monkeypatch.setattr(sys, "argv", ["repolore-mcp", "--data-dir", str(tmp_path), "--db", "experiment", *options])
 
     with pytest.raises(SystemExit) as exit_info:
         mcp_server.main()
 
     assert exit_info.value.code == 0
     assert served == [tmp_path.resolve() / "db" / "experiment.db"]
+    assert preloaded == served * preloads
+
+
+def test_preload_warms_up_the_index_model(index_file: Path, fake_embedder: FakeEmbedder) -> None:
+    models: list[str] = []
+
+    def embedder_for(model_id: str) -> FakeEmbedder:
+        models.append(model_id)
+        return fake_embedder
+
+    thread = preload(index_file, embedder_for)
+
+    assert thread is not None
+    thread.join(timeout=10)
+    assert models == [fake_embedder.model_id]
+    assert fake_embedder.warm_ups == 1
+
+
+def test_preload_without_an_index_does_nothing(tmp_path: Path, fake_embedder: FakeEmbedder) -> None:
+    assert preload(tmp_path / "db" / "default.db", lambda _: fake_embedder) is None
+    assert fake_embedder.warm_ups == 0
+
+
+@pytest.mark.parametrize(
+    "error", [UnknownModelError("built with another model"), ModelUnavailableError("can't download it")]
+)
+def test_preload_that_fails_logs_why_and_leaves_it_to_the_first_search(
+    index_file: Path, error: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    def embedder_for(_: str) -> FakeEmbedder:
+        raise error
+
+    thread = preload(index_file, embedder_for)
+
+    assert thread is not None
+    thread.join(timeout=10)
+    assert caplog.messages == [f"Not preloading the model, the first search will report why: {error}"]
 
 
 async def test_refresh_is_annotated_as_writing_and_calling_github(

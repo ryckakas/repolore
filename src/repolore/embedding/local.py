@@ -124,6 +124,9 @@ class LocalEmbedder:
             self._loaded().encode_query(text, normalize_embeddings=True, show_progress_bar=False), dtype=np.float32
         )
 
+    def warm_up(self) -> None:
+        self._loaded()
+
     def _loaded(self) -> "SentenceTransformer":
         # The MCP server runs tool calls on worker threads; parallel first searches must not load the model twice.
         with self._loading:
