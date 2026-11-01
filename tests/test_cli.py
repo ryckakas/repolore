@@ -240,7 +240,7 @@ def test_repos_without_a_config_uses_the_defaults(tmp_path: Path, monkeypatch: p
 def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data_dir = ingest_setup(tmp_path, monkeypatch)
     shutil.copytree(FIXTURES / "crashcause", data_dir / "raw" / "ryckakas" / "crashcause")
-    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_: FakeEmbedder())
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_, **__: FakeEmbedder())
 
     result = runner.invoke(app, ["inspect", "--samples", "2", "--seed", "1"])
 
@@ -279,7 +279,7 @@ def test_output_streams_that_are_not_files_are_left_alone(monkeypatch: pytest.Mo
 def cached_crashcause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data_dir = ingest_setup(tmp_path, monkeypatch)
     shutil.copytree(FIXTURES / "crashcause", data_dir / "raw" / "ryckakas" / "crashcause")
-    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_: FakeEmbedder())
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_, **__: FakeEmbedder())
     monkeypatch.setattr("repolore.cli.embedder_for", lambda _: FakeEmbedder())
     return data_dir
 
@@ -634,10 +634,10 @@ def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -
 
 
 def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    loaded: list[LocalModel] = []
+    loaded: list[tuple[LocalModel, bool]] = []
 
-    def local_embedder(model: LocalModel) -> FakeEmbedder:
-        loaded.append(model)
+    def local_embedder(model: LocalModel, *, use_gpu: bool = False) -> FakeEmbedder:
+        loaded.append((model, use_gpu))
         embedder = FakeEmbedder()
         embedder.model_id = model.model_id
         embedder.max_tokens = model.max_tokens
@@ -648,7 +648,7 @@ def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: 
 
     result = runner.invoke(app, ["build", "--db", "small-model"])
 
-    assert loaded == [BGE_SMALL, BGE_SMALL]
+    assert loaded == [(BGE_SMALL, True), (BGE_SMALL, True)]
     assert "Building with sections split at 496 tokens (the default), bot reviews excluded, bge-small." in result.output
     assert "Warning: build settings changed" not in result.output
 

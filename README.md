@@ -33,7 +33,7 @@ and macOS 14+ on Apple Silicon.
    ```
 
    It finds the repos you own or can read as a collaborator or organization member, plus your own PRs and issues in
-   other people's repos. The first build embeds everything on the CPU, which takes a while for a large account, so
+   other people's repos. The first build embeds everything locally, which takes a while for a large account, so
    start with a few repos. Create `repolore.toml` at the config path that `repolore version` prints, then run
    `repolore repos` again to check the selection:
 
@@ -51,7 +51,8 @@ and macOS 14+ on Apple Silicon.
    ```
 
    The first build downloads the embedding model, about 700 MB. As a rough guide, a small repo of 149 chunks took
-   4.5 minutes on a 12-core desktop CPU, download included.
+   4.5 minutes on a 12-core desktop CPU, download included. On Apple Silicon, `build` embeds on the GPU, roughly
+   twice as fast; set `REPOLORE_DEVICE=cpu` to keep it on the CPU.
 
 5. Search:
 

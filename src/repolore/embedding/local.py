@@ -1,3 +1,4 @@
+import os
 import threading
 from collections.abc import Callable, Sequence
 from contextlib import suppress
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from tokenizers import Tokenizer
 
 COUNT_BATCH = 1024
+DEVICE_ENV = "REPOLORE_DEVICE"
 PROMPT_MARGIN = 16
 
 
@@ -75,10 +77,15 @@ class UnknownModelError(Exception):
 
 
 class LocalEmbedder:
-    """A sentence-transformers model on the CPU. The default, voyage-4-nano, shares Voyage's hosted embedding space."""
+    """A sentence-transformers model. The default, voyage-4-nano, shares Voyage's hosted embedding space.
 
-    def __init__(self, model: LocalModel = VOYAGE_NANO) -> None:
+    It runs on the CPU. With use_gpu, it runs on the device REPOLORE_DEVICE names, or else on the Apple Silicon GPU
+    when there is one.
+    """
+
+    def __init__(self, model: LocalModel = VOYAGE_NANO, *, use_gpu: bool = False) -> None:
         self._spec = model
+        self._use_gpu = use_gpu
         self._model: SentenceTransformer | None = None
         self._tokenizer: Tokenizer | None = None
         self._loading = threading.Lock()
@@ -149,11 +156,17 @@ class LocalEmbedder:
                 trust_remote_code=spec.trust_remote_code,
                 truncate_dim=spec.dim,
                 prompts=spec.prompts or None,
-                device="cpu",
+                device=_gpu_or_cpu() if self._use_gpu else "cpu",
                 model_kwargs={"dtype": torch.float32},
             )
             self._model = _from_cache_or_hub(spec, load)
         return self._model
+
+
+def _gpu_or_cpu() -> str:
+    import torch
+
+    return os.environ.get(DEVICE_ENV) or ("mps" if torch.backends.mps.is_available() else "cpu")
 
 
 def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransformer"]) -> "SentenceTransformer":

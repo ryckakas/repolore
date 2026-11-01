@@ -130,7 +130,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   is split between blocks, and a block over the limit by lines: fence pieces reopen and close the fence, table
   pieces repeat the header row, and a single line that long is cut by characters. Each document's sections are
   counted in one call, and only those over the limit are counted block by block.
-- `embedding/` has the `Embedder` protocol and `LocalEmbedder` over sentence-transformers on the CPU in float32.
+- `embedding/` has the `Embedder` protocol and `LocalEmbedder` over sentence-transformers in float32. `build` embeds
+  on the Apple Silicon GPU (MPS) when there is one, or on the device `REPOLORE_DEVICE` names; everything else, the
+  MCP server's queries included, runs on the CPU. Both devices give the same vectors, so the embedding cache is shared.
   The default model is `voyage-4-nano` (1024 dimensions, pinned to a reviewed revision because it runs the
   model's own code); `bge-small` is the smaller alternative. An index records its model, and `embedder_for` picks
   the matching one for search. The embedding and reranking models load from the Hugging Face cache and go to the
