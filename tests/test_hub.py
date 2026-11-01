@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from repolore.hub import ModelUnavailableError, downloading
+from repolore.hub import ModelUnavailableError, cache_dir, downloading
 
 REVISION = "5fb34e870f49f19e79c94d5e118f5ee730133279"
 
@@ -42,3 +42,9 @@ def test_a_proxy_that_refuses_huggingface_co_is_a_failed_download() -> None:
 def test_other_errors_are_left_alone() -> None:
     with pytest.raises(ValueError, match="bad config"), downloading("BAAI/bge-small-en-v1.5", REVISION):
         raise ValueError("bad config")
+
+
+def test_the_cache_dir_is_the_one_huggingface_hub_uses() -> None:
+    from huggingface_hub import constants
+
+    assert cache_dir() == constants.HF_HUB_CACHE

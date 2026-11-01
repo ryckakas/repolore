@@ -3,7 +3,7 @@ import json
 import logging
 import shutil
 import sys
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -16,6 +16,7 @@ from repolore import __version__, cli, relay, shared_server
 from repolore.cli import MISS_HITS, app
 from repolore.config import Config
 from repolore.discovery import Discovery, RepoSource, Scope
+from repolore.doctor import Check
 from repolore.documents import Document
 from repolore.embedding.local import BGE_SMALL, LocalModel
 from repolore.hub import ModelUnavailableError
@@ -40,6 +41,34 @@ def test_version_prints_version_and_default_paths() -> None:
     assert f"repolore {__version__}" in result.output
     assert f"config: {defaults.config_file}" in result.output
     assert f"data:   {defaults.data_dir}" in result.output
+
+
+def fake_diagnose(checks: list[Check]) -> Callable[[AppPaths, str], Iterator[Check]]:
+    def diagnose(paths: AppPaths, db: str) -> Iterator[Check]:
+        assert db == "other"
+        yield from checks
+
+    return diagnose
+
+
+def test_doctor_prints_each_check_and_passes_when_all_do(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "diagnose", fake_diagnose([Check("index", True, "12 chunks"), Check("model", True, "x")]))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "doctor", "--db", "other"])
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[0] == f"repolore {__version__}"
+    assert result.output.splitlines()[3:] == ["✓ index: 12 chunks", "✓ model: x"]
+
+
+def test_doctor_fails_when_a_check_does(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checks = [Check("index", False, "none", "run `repolore refresh`"), Check("model", True, "x")]
+    monkeypatch.setattr(cli, "diagnose", fake_diagnose(checks))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "doctor", "--db", "other"])
+
+    assert result.exit_code == 1
+    assert result.output.splitlines()[3:] == ["✗ index: none", "  fix: run `repolore refresh`", "✓ model: x"]
 
 
 def test_data_dir_option_overrides_data_path(tmp_path: Path) -> None:

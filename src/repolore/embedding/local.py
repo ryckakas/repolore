@@ -172,12 +172,19 @@ def _gpu_or_cpu() -> str:
     return os.environ.get(DEVICE_ENV) or ("mps" if torch.backends.mps.is_available() else "cpu")
 
 
-def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransformer"]) -> "SentenceTransformer":
+def is_cached(spec: LocalModel) -> bool:
+    """Whether the model's pinned revision is in the Hugging Face cache, checked without the network."""
     from huggingface_hub import try_to_load_from_cache
 
-    # A pinned revision never changes, so a cached copy is current and asking the Hub only costs requests. A cache
-    # without modules.json would quietly load as a mean-pooling model instead of failing, so it goes to the Hub.
-    if isinstance(try_to_load_from_cache(spec.name, "modules.json", revision=spec.revision), str):
+    # A cache without modules.json would quietly load as a mean-pooling model instead of failing, so it doesn't count;
+    # the weights download last, so a first download that was cut off has none.
+    files = ("modules.json", "model.safetensors")
+    return all(isinstance(try_to_load_from_cache(spec.name, name, revision=spec.revision), str) for name in files)
+
+
+def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransformer"]) -> "SentenceTransformer":
+    # A pinned revision never changes, so a cached copy is current and asking the Hub only costs requests.
+    if is_cached(spec):
         with suppress(OSError):
             return load(local_files_only=True)
     with downloading(spec.name, spec.revision):
@@ -194,10 +201,14 @@ def _tokenizer_file(spec: LocalModel) -> str:
         return hf_hub_download(spec.name, "tokenizer.json", revision=spec.revision)
 
 
+def spec_for(model_id: str) -> LocalModel | None:
+    """The model an index records, if repolore can load that revision."""
+    return next((spec for spec in MODELS.values() if spec.model_id == model_id), None)
+
+
 @cache
 def embedder_for(model_id: str) -> LocalEmbedder:
     """The embedder an index was built with, so queries land in its vector space; one per model, loaded once."""
-    for spec in MODELS.values():
-        if spec.model_id == model_id:
-            return LocalEmbedder(spec)
+    if spec := spec_for(model_id):
+        return LocalEmbedder(spec)
     raise UnknownModelError(f"The index was built with {model_id}, which repolore can't load; rebuild it.")

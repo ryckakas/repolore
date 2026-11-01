@@ -8,6 +8,13 @@ class ModelUnavailableError(Exception):
     pass
 
 
+def cache_dir() -> str:
+    """Where Hugging Face models are cached, which HF_HOME or HF_HUB_CACHE can move."""
+    from huggingface_hub import constants
+
+    return constants.HF_HUB_CACHE
+
+
 @contextmanager
 def downloading(name: str, revision: str) -> Generator[None]:
     """Turns a failed download of a pinned model, or of one of its files, into an error that says how to get it."""

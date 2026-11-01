@@ -42,6 +42,7 @@ uv run repolore build       # embed what changed and write the index (<data-dir>
 uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
+uv run repolore doctor      # check the setup, each part as a pass or a fail with its fix; exits 1 on a fail
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --distinct, --show-misses,
                             # --holdout
 uv run ruff format          # format
@@ -196,6 +197,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
   whatever the creation flags, so a short-lived intermediate starts the real process and exits before
   `spawn_detached` returns.
+- `doctor.py` is `repolore doctor`: sqlite-vec, GitHub access, `repolore.toml`, the index, its model in the Hugging
+  Face cache, the last refresh, the shared server and the MCP clients' registrations. The GitHub check is its one
+  request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
+  never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` asks
+  each MCP client CLI on PATH (`claude`, `codex`) with `mcp get repolore`; Claude Code starts the server to check it.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
 
 Nothing is async except the relay's forwarding and the shared server's watcher, which live on the SDK's event loop:

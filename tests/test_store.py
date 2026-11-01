@@ -23,6 +23,7 @@ from repolore.store import (
     nearest,
     repo_counts,
     source_passages,
+    vector_version,
     write_index,
 )
 
@@ -265,3 +266,7 @@ def test_a_url_that_isnt_indexed_has_no_passages(index: sqlite3.Connection) -> N
 def test_source_passages_explains_an_empty_index(tmp_path: Path) -> None:
     with closing(connect(tmp_path / "empty.db")) as db, pytest.raises(StoreError, match="index is empty"):
         source_passages(db, "https://github.com/octo/repo/pull/1")
+
+
+def test_the_vector_extension_reports_its_version() -> None:
+    assert vector_version().startswith("v")

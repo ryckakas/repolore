@@ -103,6 +103,11 @@ locked. Elsewhere, a session opened before the upgrade says so on its next searc
 The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
 private repos' content, so treat that folder like the repos themselves.
 
+When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
+fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
+shared server and the MCP clients that have repolore registered. It makes one GitHub request, and when Claude Code is
+installed it asks `claude mcp get repolore`, which starts repolore to check that it connects.
+
 ### Other MCP clients
 
 `repolore-mcp` is a standard stdio MCP server, so other clients can run it too. Most take a JSON entry in the

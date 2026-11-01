@@ -7,6 +7,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, fields
+from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
@@ -24,12 +25,18 @@ RATE_LIMIT_FLOOR = 100
 RATE_LIMITED = frozenset({403, 429})
 ATTEMPTS = 3
 SEARCH_LIMIT = 1000
+GH_TOKEN = "gh auth token"
+NEEDED_SCOPES = {"repo": frozenset({"repo"}), "read:org": frozenset({"read:org", "write:org", "admin:org"})}
 
 Json = dict[str, Any]
 log = logging.getLogger(__name__)
 
 
 class GitHubError(Exception):
+    pass
+
+
+class RateLimited(GitHubError):
     pass
 
 
@@ -41,6 +48,25 @@ def resolve_token() -> str:
     except (OSError, subprocess.CalledProcessError) as error:
         raise GitHubError(f"No GitHub token: set {TOKEN_ENV}, or log in with `gh auth login`.") from error
     return result.stdout.strip()
+
+
+def token_source() -> str:
+    return TOKEN_ENV if os.environ.get(TOKEN_ENV) else GH_TOKEN
+
+
+@dataclass(frozen=True)
+class TokenInfo:
+    login: str
+    scopes: frozenset[str] | None
+    remaining: int | None
+    limit: int | None
+
+    @property
+    def missing_scopes(self) -> list[str]:
+        """The classic scopes repolore needs that the token lacks; a fine-grained token has no scopes to check."""
+        if self.scopes is None:
+            return []
+        return [scope for scope, granting in NEEDED_SCOPES.items() if not self.scopes & granting]
 
 
 class GitHubClient:
@@ -63,11 +89,24 @@ class GitHubClient:
         self._http.close()
 
     def query(self, operation: str, **variables: Any) -> Json:
-        body = {"query": QUERIES, "operationName": operation, "variables": variables}
-        payload = self._request("POST", "/graphql", json=body)
-        if errors := payload.get("errors"):
-            raise GitHubError(f"{operation}: {'; '.join(error['message'] for error in errors)}")
-        return payload["data"]
+        return _data(operation, self._request("POST", "/graphql", json=_graphql(operation, variables)))
+
+    def token_info(self) -> TokenInfo:
+        """The token's login, scopes and GraphQL points left, in one request that never waits for the rate limit."""
+        response = self._http.post("/graphql", json=_graphql("Viewer", {}))
+        if _rejected(response):
+            wait = _rate_limit_wait(response, now := self._clock())
+            until = datetime.fromtimestamp(now + wait, UTC).isoformat(timespec="minutes") if wait else "it resets"
+            raise RateLimited(f"the GraphQL rate limit is spent until {until}")
+        login = _data("Viewer", _parse(response))["viewer"]["login"]
+        headers = response.headers
+        scopes = headers.get("x-oauth-scopes")
+        return TokenInfo(
+            login=login,
+            scopes=None if scopes is None else frozenset(scope.strip() for scope in scopes.split(",") if scope.strip()),
+            remaining=_header_int(headers, "x-ratelimit-remaining"),
+            limit=_header_int(headers, "x-ratelimit-limit"),
+        )
 
     def get(self, path: str, **params: Any) -> Json:
         return self._request("GET", path, params=params)
@@ -87,6 +126,21 @@ class GitHubClient:
             if not rejected:
                 return _parse(response)
             attempt += 1
+
+
+def _graphql(operation: str, variables: Json) -> Json:
+    return {"query": QUERIES, "operationName": operation, "variables": variables}
+
+
+def _data(operation: str, payload: Json) -> Json:
+    if errors := payload.get("errors"):
+        raise GitHubError(f"{operation}: {'; '.join(error['message'] for error in errors)}")
+    return payload["data"]
+
+
+def _header_int(headers: httpx.Headers, name: str) -> int | None:
+    value = headers.get(name)
+    return None if value is None else int(value)
 
 
 def _rate_limit_wait(response: httpx.Response, now: float) -> float | None:

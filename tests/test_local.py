@@ -20,6 +20,7 @@ class StubModel:
     encodes: ClassVar[list[dict[str, Any]]] = []
     cache_lookups: ClassVar[list[tuple[str, str, str]]] = []
     modules_json_cached: ClassVar[bool] = True
+    safetensors_cached: ClassVar[bool] = True
     weights_cached: ClassVar[bool] = True
     hub_reachable: ClassVar[bool] = True
 
@@ -33,7 +34,8 @@ class StubModel:
     @staticmethod
     def try_to_load_from_cache(repo_id: str, filename: str, revision: str) -> str | None:
         StubModel.cache_lookups.append((repo_id, filename, revision))
-        return f"/hf/{repo_id}/{revision}/{filename}" if StubModel.modules_json_cached else None
+        cached = StubModel.modules_json_cached if filename == "modules.json" else StubModel.safetensors_cached
+        return f"/hf/{repo_id}/{revision}/{filename}" if cached else None
 
     def encode_document(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
         StubModel.encodes.append(kwargs)
@@ -50,6 +52,7 @@ def stub_sentence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
     StubModel.encodes = []
     StubModel.cache_lookups = []
     StubModel.modules_json_cached = True
+    StubModel.safetensors_cached = True
     StubModel.weights_cached = True
     StubModel.hub_reachable = True
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=StubModel))
@@ -78,7 +81,10 @@ def test_model_is_loaded_once_pinned_and_in_float32() -> None:
             "local_files_only": True,
         }
     ]
-    assert StubModel.cache_lookups == [("voyageai/voyage-4-nano", "modules.json", local.VOYAGE_NANO.revision)]
+    assert StubModel.cache_lookups == [
+        ("voyageai/voyage-4-nano", "modules.json", local.VOYAGE_NANO.revision),
+        ("voyageai/voyage-4-nano", "model.safetensors", local.VOYAGE_NANO.revision),
+    ]
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")
@@ -276,3 +282,39 @@ def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest
 def test_the_window_leaves_room_for_the_prompt() -> None:
     assert LocalEmbedder().max_tokens == 32_768 - local.PROMPT_MARGIN
     assert LocalEmbedder(local.BGE_SMALL).max_tokens == 512 - local.PROMPT_MARGIN
+
+
+@pytest.mark.usefixtures("stub_sentence_transformers")
+def test_a_model_is_cached_when_its_pinned_modules_json_and_weights_are() -> None:
+    assert local.is_cached(local.BGE_SMALL)
+    assert StubModel.cache_lookups == [
+        ("BAAI/bge-small-en-v1.5", "modules.json", local.BGE_SMALL.revision),
+        ("BAAI/bge-small-en-v1.5", "model.safetensors", local.BGE_SMALL.revision),
+    ]
+
+
+@pytest.mark.usefixtures("stub_sentence_transformers")
+def test_a_model_whose_weights_never_finished_downloading_is_not_cached() -> None:
+    StubModel.safetensors_cached = False
+
+    assert not local.is_cached(local.BGE_SMALL)
+
+    LocalEmbedder(local.BGE_SMALL).embed_query("a")
+    assert "local_files_only" not in StubModel.loads[0]
+
+
+@pytest.mark.parametrize("spec", [local.VOYAGE_NANO, local.BGE_SMALL])
+def test_a_recorded_model_id_names_its_spec(spec: local.LocalModel) -> None:
+    assert local.spec_for(spec.model_id) is spec
+
+
+def test_a_model_id_of_another_revision_has_no_spec() -> None:
+    assert local.spec_for("voyageai/voyage-4-nano@000000000000") is None
+
+
+@pytest.mark.usefixtures("stub_sentence_transformers")
+def test_a_model_without_its_modules_json_is_not_cached() -> None:
+    StubModel.modules_json_cached = False
+
+    assert not local.is_cached(local.VOYAGE_NANO)
+    assert StubModel.loads == []
