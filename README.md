@@ -79,10 +79,10 @@ and macOS 14+ on Apple Silicon.
 
 To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was
 built with, and only one refresh runs at a time. Search keeps working meanwhile. Claude Code can do the same: the MCP
-server's `refresh` tool starts one in the background, and `list_repos` says when the index was built and how the
-last refresh went. Claude Code asks before the first call; to allow it for good, add `mcp__repolore__refresh` to
-`permissions.allow` in your Claude Code settings. To refresh once at the start of every session instead, add a
-`SessionStart` hook to `~/.claude/settings.json`:
+server's `refresh` tool starts one in the background, and `list_repos` says when the index was built, how the last
+refresh went and, while one runs, how far it has got (repos fetched, chunks embedded). Claude Code asks before the
+first call; to allow it for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings.
+To refresh once at the start of every session instead, add a `SessionStart` hook to `~/.claude/settings.json`:
 
 ```json
 {

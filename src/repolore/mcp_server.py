@@ -91,7 +91,9 @@ class Repo(BaseModel):
 class Repos(BaseModel):
     repos: list[Repo]
     built_at: str | None = Field(description="When the index was last built, in UTC.")
-    refresh: RefreshStatus = Field(description="The last refresh started from here or with `repolore refresh`.")
+    refresh: RefreshStatus = Field(
+        description="The last refresh started from here or with `repolore refresh`, with its progress while it runs."
+    )
 
 
 class Refresh(BaseModel):
@@ -215,7 +217,7 @@ def _open(index_file: Path) -> Generator[sqlite3.Connection]:
 
 def _refresh_note(status: RefreshStatus) -> str:
     if status.running:
-        return " A refresh is running."
+        return f" A refresh is running ({status.progress})." if status.progress else " A refresh is running."
     if status.ok is False:
         return f" The last refresh failed: {status.error}"
     return ""

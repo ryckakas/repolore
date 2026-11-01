@@ -8,6 +8,7 @@ from repolore import ingest as ingest_module
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import DocumentKind
 from repolore.ingest import SCOPE_FILE, cached_documents, ingest
+from repolore.progress import Phase, Progress
 from repolore.sources.github import GitHubClient, RawRepo
 from repolore.sources.plans import PLANS_FILE
 
@@ -152,3 +153,25 @@ def test_nothing_discovered_purges_everything(tmp_path: Path) -> None:
 
     assert ingest(discovery(), tmp_path, CLIENT) == []
     assert list(tmp_path.iterdir()) == []
+
+
+def test_progress_counts_the_repos_fetched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeFetch(monkeypatch)
+    reports: list[Progress] = []
+
+    ingest(
+        discovery(RepoSource(REPO, Scope.OWNED), RepoSource("other/project", Scope.CONTRIBUTED)),
+        tmp_path,
+        CLIENT,
+        report=reports.append,
+    )
+
+    assert reports == [Progress(phase=Phase.INGEST, done=done, total=2) for done in range(3)]
+
+
+def test_progress_with_nothing_discovered_has_nothing_to_fetch(tmp_path: Path) -> None:
+    reports: list[Progress] = []
+
+    ingest(discovery(), tmp_path, CLIENT, report=reports.append)
+
+    assert reports == [Progress(phase=Phase.INGEST, done=0, total=0)]

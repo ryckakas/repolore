@@ -16,6 +16,7 @@ from repolore.embedding.local import UnknownModelError
 from repolore.hub import ModelUnavailableError
 from repolore.mcp_server import READ_CHARS, TEXT_CHARS, create_server, preload
 from repolore.paths import AppPaths
+from repolore.progress import Phase, Progress
 from repolore.refresh import refreshing
 from repolore.store import connect, write_index
 
@@ -351,7 +352,9 @@ async def test_without_an_index_list_repos_says_how_a_refresh_is_going(
     missing = tmp_path / "db" / "default.db"
 
     async with Client(server(missing, fake_embedder)) as client:
-        with refreshing(tmp_path):
+        with refreshing(tmp_path) as report:
+            starting = await client.call_tool("list_repos", {})
+            report(Progress(phase=Phase.EMBED, done=120, total=5000))
             running = await client.call_tool("list_repos", {})
         with pytest.raises(ValueError, match="no token"), refreshing(tmp_path):
             raise ValueError("no token")
@@ -359,13 +362,25 @@ async def test_without_an_index_list_repos_says_how_a_refresh_is_going(
         (tmp_path / "refresh.json").unlink()
         never = await client.call_tool("list_repos", {})
 
-    texts = [
-        result.content[0].text for result in (running, failed, never) if isinstance(result.content[0], TextContent)
-    ]
-    assert all(result.is_error for result in (running, failed, never))
+    results = (starting, running, failed, never)
+    texts = [result.content[0].text for result in results if isinstance(result.content[0], TextContent)]
+    assert all(result.is_error for result in results)
     assert texts[0].endswith("to build it. A refresh is running.")
-    assert texts[1].endswith("to build it. The last refresh failed: no token")
-    assert texts[2].endswith("to build it.")
+    assert texts[1].endswith("to build it. A refresh is running (embed 120 of 5000).")
+    assert texts[2].endswith("to build it. The last refresh failed: no token")
+    assert texts[3].endswith("to build it.")
+
+
+async def test_list_repos_says_how_far_a_running_refresh_has_got(index_file: Path, fake_embedder: FakeEmbedder) -> None:
+    async with Client(server(index_file, fake_embedder)) as client:
+        with refreshing(index_file.parent.parent) as report:
+            report(Progress(phase=Phase.INGEST, done=3, total=50))
+            result = await client.call_tool("list_repos", {})
+
+    assert result.structured_content is not None
+    refresh = result.structured_content["refresh"]
+    assert refresh["running"] is True
+    assert refresh["progress"] == {"phase": "ingest", "done": 3, "total": 50}
 
 
 def index_of(tmp_path: Path, embedder: FakeEmbedder, chunks: list[Chunk]) -> Path:

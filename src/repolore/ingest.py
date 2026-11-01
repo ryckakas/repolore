@@ -4,6 +4,7 @@ from pathlib import Path
 
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import Document, documents_from, plan_documents
+from repolore.progress import Phase, Progress, Report, ignore
 from repolore.sources.github import GitHubClient, RawRepo, fetch_contributions, fetch_repo
 from repolore.sources.plans import PLANS_FILE, load_plans, read_plans, save_plans
 
@@ -13,12 +14,17 @@ WHOLE_HISTORY = frozenset({Scope.OWNED, Scope.MEMBER})
 log = logging.getLogger(__name__)
 
 
-def ingest(discovery: Discovery, raw_dir: Path, client: GitHubClient, full: bool = False) -> list[Document]:
+def ingest(
+    discovery: Discovery, raw_dir: Path, client: GitHubClient, full: bool = False, report: Report = ignore
+) -> list[Document]:
     """Bring the raw cache in line with the discovered repos, then read every document from it."""
-    for source in discovery.included:
+    total = len(discovery.included)
+    for done, source in enumerate(discovery.included):
+        report(Progress(phase=Phase.INGEST, done=done, total=total))
         directory = raw_dir / source.name
         _sync_history(client, source, discovery.login, directory, full)
         _sync_plans(source, directory)
+    report(Progress(phase=Phase.INGEST, done=total, total=total))
     _purge(raw_dir, {source.name.lower() for source in discovery.included})
     return cached_documents(raw_dir)
 
