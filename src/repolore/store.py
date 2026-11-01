@@ -2,6 +2,7 @@ import hashlib
 import re
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +93,12 @@ def connect(path: Path) -> sqlite3.Connection:
 
 def connect_read_only(path: Path) -> sqlite3.Connection:
     return _with_vectors(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True))
+
+
+def vector_version() -> str:
+    """The sqlite-vec version, loaded the way an index loads it."""
+    with closing(_with_vectors(sqlite3.connect(":memory:"))) as db:
+        return db.execute("select vec_version()").fetchone()[0]
 
 
 def _with_vectors(db: sqlite3.Connection) -> sqlite3.Connection:

@@ -18,6 +18,7 @@ from repolore import __version__
 from repolore.chunking import Chunk, chunk_document, chunk_limit, count_split_sections
 from repolore.config import Config, load_config
 from repolore.discovery import discover
+from repolore.doctor import diagnose
 from repolore.documents import Document, DocumentKind
 from repolore.embedding.local import MODELS, LocalEmbedder, ModelName, UnknownModelError, embedder_for
 from repolore.evals.harness import (
@@ -84,7 +85,10 @@ def _log_progress() -> None:
 @app.command()
 def version(ctx: typer.Context) -> None:
     """Print the version and the resolved config and data paths."""
-    paths: AppPaths = ctx.obj
+    _print_version(ctx.obj)
+
+
+def _print_version(paths: AppPaths) -> None:
     typer.echo(f"repolore {__version__}")
     typer.echo(f"config: {paths.config_file}")
     typer.echo(f"data:   {paths.data_dir}")
@@ -323,6 +327,23 @@ def _recorded_settings(index_file: Path) -> BuildSettings:
             return BuildSettings.recorded(index_settings(index))
         except StoreError:
             return BuildSettings()
+
+
+@app.command()
+def doctor(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
+    """Check the setup and say how to fix what's wrong: sqlite-vec, GitHub access, repolore.toml, the index, the model,
+    the last refresh, the shared server and the MCP clients that have repolore registered.
+
+    Exits with 1 when a check fails. It makes one GitHub request, and Claude Code starts repolore to check it.
+    """
+    paths: AppPaths = ctx.obj
+    _print_version(paths)
+    failed = False
+    for check in diagnose(paths, db):
+        typer.echo(str(check))
+        failed |= not check.ok
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()

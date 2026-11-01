@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -13,7 +14,9 @@ from repolore.sources import github
 from repolore.sources.github import (
     GitHubClient,
     GitHubError,
+    RateLimited,
     RawRepo,
+    TokenInfo,
     ViewerOrg,
     ViewerRepo,
     fetch_contributions,
@@ -21,6 +24,7 @@ from repolore.sources.github import (
     involved_repositories,
     involved_repositories_among,
     resolve_token,
+    token_source,
     viewer_organizations,
     viewer_repositories,
 )
@@ -531,3 +535,85 @@ def test_missing_token_is_an_error(monkeypatch: pytest.MonkeyPatch, failure: Exc
 
     with pytest.raises(GitHubError, match="No GitHub token"):
         resolve_token()
+
+
+def test_the_token_source_is_the_environment_variable_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(github.TOKEN_ENV, "from-env")
+
+    assert token_source() == github.TOKEN_ENV
+
+
+def test_the_token_source_is_gh_without_the_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(github.TOKEN_ENV, raising=False)
+
+    assert token_source() == github.GH_TOKEN
+
+
+def viewer_handler(headers: dict[str, str], status: int = 200) -> Callable[[httpx.Request], httpx.Response]:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["operationName"] == "Viewer"
+        return httpx.Response(status, json={"data": {"viewer": {"login": "octocat"}}}, headers=headers)
+
+    return handle
+
+
+def test_token_info_reads_the_login_scopes_and_points_left() -> None:
+    headers = {"x-oauth-scopes": "gist, read:org, repo", "x-ratelimit-remaining": "4800", "x-ratelimit-limit": "5000"}
+
+    info = client_for(viewer_handler(headers)).token_info()
+
+    assert info == TokenInfo("octocat", frozenset({"gist", "read:org", "repo"}), 4800, 5000)
+    assert info.missing_scopes == []
+
+
+def test_token_info_never_waits_for_a_low_rate_limit() -> None:
+    sleeps: list[float] = []
+    headers = {"x-ratelimit-remaining": "5", "x-ratelimit-limit": "5000", "x-ratelimit-reset": str(NOW + 600)}
+
+    info = client_for(viewer_handler(headers), sleeps).token_info()
+
+    assert (info.remaining, sleeps) == (5, [])
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "until"),
+    [
+        (200, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(NOW + 600))}, "1970-01-12T13:56+00:00"),
+        (403, {"retry-after": "60", "x-ratelimit-reset": str(int(NOW + 3000))}, "1970-01-12T13:47+00:00"),
+        (403, {}, "it resets"),
+    ],
+)
+def test_a_spent_rate_limit_is_its_own_error(status: int, headers: dict[str, str], until: str) -> None:
+    def handle(_: httpx.Request) -> httpx.Response:
+        body = {"errors": [{"type": "RATE_LIMITED", "message": "API rate limit exceeded"}]}
+        return httpx.Response(status, json=body, headers=headers)
+
+    with pytest.raises(RateLimited, match=re.escape(f"spent until {until}")):
+        client_for(handle).token_info()
+
+
+def test_a_token_without_scopes_headers_is_fine_grained() -> None:
+    info = client_for(viewer_handler({})).token_info()
+
+    assert (info.scopes, info.remaining, info.limit, info.missing_scopes) == (None, None, None, [])
+
+
+@pytest.mark.parametrize(
+    ("scopes", "missing"),
+    [
+        ("", ["repo", "read:org"]),
+        ("repo", ["read:org"]),
+        ("public_repo, read:org", ["repo"]),
+        ("repo, admin:org", []),
+        ("repo, write:org", []),
+    ],
+)
+def test_missing_scopes_count_the_scopes_that_grant_them(scopes: str, missing: list[str]) -> None:
+    info = client_for(viewer_handler({"x-oauth-scopes": scopes})).token_info()
+
+    assert info.missing_scopes == missing
+
+
+def test_a_rejected_token_is_an_error() -> None:
+    with pytest.raises(GitHubError, match="HTTP 401"):
+        client_for(viewer_handler({}, status=401)).token_info()
