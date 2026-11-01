@@ -9,6 +9,7 @@ from typing import IO
 
 import pytest
 from conftest import FakeEmbedder, SharedServer
+from filelock import FileLock
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters
 from mcp.shared.exceptions import MCPError
@@ -18,8 +19,24 @@ from repolore import shared_server as shared_server_module
 from repolore.locks import hold
 from repolore.paths import AppPaths
 from repolore.refresh import QUIET
-from repolore.relay import Relay, ServerUnavailable, create_relay, describe, find_or_start, start_server
-from repolore.server_state import Discovery, ServerFiles, connected_relays, is_running, request_stop, write_discovery
+from repolore.relay import (
+    Relay,
+    ServerUnavailable,
+    create_relay,
+    describe,
+    find_or_start,
+    start_server,
+    stop_server,
+)
+from repolore.server_state import (
+    Discovery,
+    ServerFiles,
+    connected_relays,
+    is_running,
+    read_discovery,
+    request_stop,
+    write_discovery,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -82,6 +99,32 @@ def test_an_old_server_that_does_not_stop_names_its_log(tmp_path: Path, monkeypa
         find_or_start(files, start=_never_start)
 
     assert files.stop.exists()
+
+
+def test_stop_also_stops_a_server_that_was_waiting_for_the_lock(
+    data_paths: AppPaths, fake_embedder: FakeEmbedder, shared_server: SharedServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared_server.start()
+    waiting = threading.Event()
+
+    def hold_and_signal(lock_file: Path, timeout: float) -> FileLock:
+        lock = hold(lock_file, timeout=timeout)
+        waiting.set()
+        return lock
+
+    monkeypatch.setattr(shared_server_module, "hold", hold_and_signal)
+    second = SharedServer(data_paths, fake_embedder)
+    second.launch()
+    assert waiting.wait(10)
+    time.sleep(0.2)
+
+    stop_server(shared_server.files)
+
+    shared_server.join()
+    second.join()
+    assert (shared_server.outcome, second.outcome) == ([True], [True])
+    assert not is_running(shared_server.files)
+    assert read_discovery(shared_server.files) is None
 
 
 def test_the_server_is_started_detached_with_its_log_appended(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

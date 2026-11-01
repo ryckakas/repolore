@@ -132,8 +132,11 @@ class SharedServer:
             daemon=True,
         )
 
-    def start(self) -> Discovery:
+    def launch(self) -> None:
         self._thread.start()
+
+    def start(self) -> Discovery:
+        self.launch()
         deadline = time.monotonic() + 30
         while (found := read_discovery(self.files)) is None or found.pid != os.getpid():
             assert time.monotonic() < deadline, "The shared server didn't start."

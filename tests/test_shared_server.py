@@ -1,5 +1,7 @@
 import os
+import threading
 import time
+from pathlib import Path
 
 import anyio
 import httpx2
@@ -11,6 +13,7 @@ from mcp.types.version import LATEST_MODERN_VERSION
 
 from repolore import __version__
 from repolore import shared_server as shared_server_module
+from repolore.locks import hold
 from repolore.paths import AppPaths
 from repolore.server_state import Discovery, is_running, read_discovery, registered
 from repolore.shared_server import StaticTokenVerifier
@@ -92,7 +95,7 @@ def test_a_stop_request_ends_it_and_clears_its_address(shared_server: SharedServ
 
     assert shared_server.outcome == [True]
     assert read_discovery(shared_server.files) is None
-    assert not shared_server.files.stop.exists()
+    assert shared_server.files.stop.exists()
     assert not is_running(shared_server.files)
 
 
@@ -103,6 +106,25 @@ def test_a_stop_request_left_from_before_it_started_is_ignored(shared_server: Sh
     time.sleep(0.3)
 
     assert is_running(shared_server.files)
+
+
+def test_a_server_waiting_for_one_that_exits_unasked_takes_over(shared_server: SharedServer) -> None:
+    held = threading.Event()
+    holder = threading.Thread(target=_hold_for, args=(shared_server.files.lock, 0.5, held))
+    holder.start()
+    assert held.wait(5)
+
+    found = shared_server.start()
+
+    holder.join()
+    assert found.pid == os.getpid()
+    assert is_running(shared_server.files)
+
+
+def _hold_for(lock_file: Path, seconds: float, held: threading.Event) -> None:
+    with hold(lock_file, timeout=0):
+        held.set()
+        time.sleep(seconds)
 
 
 def test_without_any_session_it_exits_after_the_idle_time(
@@ -139,7 +161,7 @@ def test_a_second_server_gives_up_while_one_runs(
     monkeypatch.setattr(shared_server_module, "LOCK_WAIT_SECONDS", 0.2)
     second = SharedServer(data_paths, fake_embedder)
 
-    second._thread.start()  # pyright: ignore[reportPrivateUsage]
+    second.launch()
     second.join()
 
     assert second.outcome == [False]

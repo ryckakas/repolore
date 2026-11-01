@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 
 import anyio
 import uvicorn
-from filelock import Timeout
+from filelock import FileLock, Timeout
 from mcp.server.auth.provider import AccessToken
 
 from repolore import __version__
@@ -43,19 +43,33 @@ def run_shared(paths: AppPaths, db: str, idle_minutes: float, embedder_for: Call
     paths.data_dir.mkdir(parents=True, exist_ok=True)
     lock = hold(files.lock, timeout=LOCK_WAIT_SECONDS)
     try:
-        lock.acquire()
+        waited = _take(lock)
     except Timeout:
-        log.info("A shared server for %s is already running.", db)
         return False
     try:
+        # A server that serves deletes a stop file left from before it, so one found after waiting was meant for the
+        # server this one waited for, which was started in the same moment as this one, and for this one too. That
+        # is why a stopped server leaves its stop file behind.
+        if waited and files.stop.exists():
+            log.info("Stopping: asked to while waiting for the server before it.")
+            return True
         files.discovery.unlink(missing_ok=True)
         files.stop.unlink(missing_ok=True)
         anyio.run(_serve, paths, files, idle_minutes * 60, embedder_for)
     finally:
         files.discovery.unlink(missing_ok=True)
-        files.stop.unlink(missing_ok=True)
         lock.release()
     return True
+
+
+def _take(lock: FileLock) -> bool:
+    """Take the lock, waiting for a server that holds it; True if it had to wait."""
+    try:
+        lock.acquire(timeout=0)
+    except Timeout:
+        lock.acquire()
+        return True
+    return False
 
 
 async def _serve(
