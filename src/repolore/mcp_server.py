@@ -18,7 +18,7 @@ from repolore.documents import DocumentKind
 from repolore.embedding import Embedder
 from repolore.embedding.local import UnknownModelError, embedder_for
 from repolore.hub import ModelUnavailableError
-from repolore.instructions import INSTRUCTIONS
+from repolore.instructions import INSTRUCTIONS, SEARCH
 from repolore.paths import AppPaths, resolve_paths
 from repolore.refresh import RefreshStatus, refresh_status, start_refresh
 from repolore.retrieval import Mode
@@ -112,7 +112,7 @@ def create_server(
     )
     index_file = paths.index_file(db_name)
 
-    @server.tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY, description=SEARCH)
     def search(
         query: Annotated[str, Field(description="A question or keywords, in plain words.")],
         repo: Annotated[str | None, Field(description="Only this repo, as owner/name.")] = None,
@@ -135,7 +135,6 @@ def create_server(
             ),
         ] = True,
     ) -> SearchResults:
-        """Find the passages that best match the query, best first, with permalinks."""
         with _open(index_file) as db:
             try:
                 embedder = embedder_for(index_model(db)[0])

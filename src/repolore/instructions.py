@@ -1,3 +1,8 @@
+SEARCH = (
+    "Search the user's own engineering history on GitHub (PRs and their discussions, review threads, issues, commits, "
+    "repo docs and local plans) for the passages that best match the query, best first, with permalinks to cite. The "
+    "first search after the server starts can wait a minute or more while the embedding model loads."
+)
 INSTRUCTIONS = (
     "Searches the user's own engineering history on GitHub: pull request descriptions and discussions, review "
     "threads, issues, commits without a PR, and repository markdown (README, AGENTS.md, docs). Use it when the user "

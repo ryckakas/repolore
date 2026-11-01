@@ -78,11 +78,12 @@ and macOS 14+ on Apple Silicon.
    `repolore-mcp --standalone` serves from the session's own process, with its own copy of the model, as before.
 
 To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was
-built with, and only one refresh runs at a time. Search keeps working meanwhile. Claude Code can do the same: the MCP
+built with, and only one refresh runs at a time. Search keeps working meanwhile. An MCP client can do the same: the
 server's `refresh` tool starts one in the background, and `list_repos` says when the index was built, how the last
 refresh went and, while one runs, how far it has got (repos fetched, chunks embedded). Claude Code asks before the
 first call; to allow it for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings.
-To refresh once at the start of every session instead, add a `SessionStart` hook to `~/.claude/settings.json`:
+To have Claude Code refresh once at the start of every session instead, add a `SessionStart` hook to
+`~/.claude/settings.json`:
 
 ```json
 {
@@ -94,12 +95,43 @@ To refresh once at the start of every session instead, add a `SessionStart` hook
 }
 ```
 
-`uv tool upgrade repolore` updates repolore itself. On Windows, close the Claude Code sessions using repolore (or
-disable it in `/mcp`) and run `repolore server stop` first, since running programs keep their files locked. Elsewhere,
-a session opened before the upgrade says so on its next search; reconnect repolore in `/mcp`.
+`uv tool upgrade repolore` updates repolore itself. On Windows, close the sessions using repolore (in Claude Code you
+can disable it in `/mcp` instead) and run `repolore server stop` first, since running programs keep their files
+locked. Elsewhere, a session opened before the upgrade says so on its next search; reconnect repolore in your client
+(`/mcp` in Claude Code).
 
 The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
 private repos' content, so treat that folder like the repos themselves.
+
+### Other MCP clients
+
+`repolore-mcp` is a standard stdio MCP server, so other clients can run it too. Most take a JSON entry in the
+portable `mcpServers` format (VS Code's own `mcp.json` calls the object `servers`):
+
+```json
+{ "mcpServers": { "repolore": { "command": "repolore-mcp" } } }
+```
+
+For Codex, add it to `~/.codex/config.toml` with longer timeouts:
+
+```toml
+[mcp_servers.repolore]
+command = "repolore-mcp"
+startup_timeout_sec = 60
+tool_timeout_sec = 300
+```
+
+Codex's startup timeout covers the server's `tools/list`, which takes about 8 seconds when no shared server is
+running yet and longer after a reboot, and its tool timeout covers a search that waits for the model to load, about
+30 seconds warm and minutes cold. Its documented defaults are 10 and 60 seconds. When building a session's tool list,
+Codex waits only about a second for servers that aren't required (`mcp_optional_startup_grace_ms`); set that to `0`,
+or `required = true` on this server, to wait for the startup timeout instead.
+
+Codex gives a server only a short list of environment variables: `PATH`, the home, app data and temp folders, and a
+few more. That's enough for `gh auth token` (checked on Windows). If you rely on `REPOLORE_GITHUB_TOKEN`, `HF_HOME`,
+`HTTPS_PROXY`, `REPOLORE_DEVICE` or an `XDG_*` directory, list it in `env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay
+finds its folders through `XDG_*`, and the shared server, which every client's sessions share, and the refreshes it
+starts inherit the environment of whichever session started it.
 
 ## What the experiments found
 
