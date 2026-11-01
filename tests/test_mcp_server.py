@@ -131,8 +131,8 @@ async def test_search_filters(index_file: Path, fake_embedder: FakeEmbedder) -> 
     ]
 
 
-@pytest.mark.parametrize(("distinct", "urls"), [(None, 2), (False, 2), (True, 3)])
-async def test_search_repeats_a_source_unless_distinct(
+@pytest.mark.parametrize(("distinct", "urls"), [(None, 3), (True, 3), (False, 2)])
+async def test_search_returns_one_passage_per_source_unless_told_not_to(
     tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory, distinct: bool | None, urls: int
 ) -> None:
     documents = [

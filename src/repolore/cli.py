@@ -243,6 +243,7 @@ SNIPPET_CHARS = 300
 IndexOption = Annotated[str, typer.Option("--db", help="Name of the index to use, one per pipeline config.")]
 ModeOption = Annotated[Mode, typer.Option(help="Vector (meaning), keyword (BM25) or hybrid (both, fused by rank).")]
 RerankOption = Annotated[bool, typer.Option(help="Rerank the top 50 candidates with a local cross-encoder.")]
+DistinctOption = Annotated[bool, typer.Option(help="Return at most one chunk per source URL.")]
 SEARCH_ERRORS = (StoreError, UnknownModelError, ModelUnavailableError)
 
 
@@ -327,7 +328,7 @@ def search(
     db: IndexOption = DEFAULT_INDEX,
     mode: ModeOption = Mode.VECTOR,
     rerank: RerankOption = False,
-    distinct: Annotated[bool, typer.Option(help="Return at most one chunk per source URL.")] = False,
+    distinct: DistinctOption = False,
 ) -> None:
     """Find the chunks that best match the query."""
     paths: AppPaths = ctx.obj
@@ -356,6 +357,7 @@ def eval_(
     show_misses: Annotated[bool, typer.Option(help="List questions whose sources aren't all in the top 5.")] = False,
     mode: ModeOption = Mode.VECTOR,
     rerank: RerankOption = False,
+    distinct: DistinctOption = False,
     file: Annotated[
         Path | None, typer.Option(help="Question file to use instead of the one in the config dir.")
     ] = None,
@@ -373,7 +375,10 @@ def eval_(
         chunks = sum(sum(kinds.values()) for kinds in repo_counts(index).values())
         reranker = CrossEncoderReranker() if rerank else None
         results = evaluate(
-            questions, lambda text: search_index(index, embedder, text, SEARCH_DEPTH, Filters(), mode, reranker)
+            questions,
+            lambda text: search_index(
+                index, embedder, text, SEARCH_DEPTH, Filters(), mode, reranker, distinct=distinct
+            ),
         )
     fingerprint = f"{hashlib.sha256(questions_file.read_bytes()).hexdigest()[:12]}:{'holdout' if holdout else 'tuning'}"
     config = {
@@ -382,7 +387,7 @@ def eval_(
         "max_tokens": settings.get("max_tokens"),
         "bot_reviews": settings.get("bot_reviews", "excluded"),
         "chunks": chunks,
-        "retrieval": f"{mode}+rerank" if rerank else str(mode),
+        "retrieval": _retrieval_label(mode, rerank, distinct),
         "k": SEARCH_DEPTH,
         "questions": fingerprint,
     }
@@ -402,6 +407,15 @@ def eval_(
     if show_misses:
         _print_misses(results)
     typer.echo(f"run saved to {save_run(runs_dir, run)}")
+
+
+def _retrieval_label(mode: Mode, rerank: bool, distinct: bool) -> str:
+    options = [str(mode)]
+    if rerank:
+        options.append("rerank")
+    if distinct:
+        options.append("distinct")
+    return "+".join(options)
 
 
 def _questions_or_exit(path: Path) -> QuestionSet:

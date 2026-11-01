@@ -41,7 +41,8 @@ uv run repolore build       # embed what changed and write the index (<data-dir>
                             # threads started by bots; a left-out option keeps the index's last value)
 uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
-uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --show-misses, --holdout
+uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --distinct, --show-misses,
+                            # --holdout
 uv run ruff format          # format
 uv run ruff check           # lint
 uv run pyright              # type-check (standard mode)
@@ -149,8 +150,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   keys vectors by model and chunk text, so every index reuses them and a rebuild embeds only changed chunks.
 - `indexing.py` builds an index. `retrieval.py` searches one in `vector`, `keyword` (FTS5 BM25) or `hybrid` mode
   (reciprocal rank fusion), optionally reranked by `reranking.py`'s local cross-encoder. The defaults (vector,
-  whole sections, no reranking) come from the experiments in `EXPERIMENTS.md`; change them only with a measured
-  `repolore eval` result.
+  whole sections, no reranking, and in the MCP tool one chunk per source URL) come from the experiments in
+  `EXPERIMENTS.md`; change them only with a measured `repolore eval` result.
 - `evals/questions.py` loads the eval question set. The real set lives in the config dir
   (`repolore questions` prints where) and is never committed, because it names private repos;
   `evals/questions.example.yaml` shows the format.
