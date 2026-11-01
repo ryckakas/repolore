@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from repolore.chunking import chunk_document
 from repolore.documents import GHOST, Document, DocumentKind, Visibility, documents_from, plan_documents
 from repolore.sources.github import RawRepo
 from repolore.sources.plans import PlanFile
@@ -19,6 +20,7 @@ OPENWB_INFO = {
     "isPrivate": False,
     "defaultBranchRef": {"name": "main"},
 }
+BUILT_PULL = "https://github.com/ryckakas/crashcause/pull/1"
 PR_LESS_COMMIT = "https://github.com/ryckakas/crashcause/commit/69531a3aa08bf8d47f1428261efc3038537127b6"
 
 
@@ -68,18 +70,66 @@ def test_bot_pull_request_is_dropped() -> None:
     assert "https://github.com/ryckakas/crashcause/pull/3" not in urls
 
 
-def test_empty_pull_request_body_is_built_from_commits_and_files() -> None:
-    pull = by_url(documents_from(CRASHCAUSE), "https://github.com/ryckakas/crashcause/pull/1")
+def built_pull(*messages: tuple[str, str]) -> Document:
+    pulls = copy.deepcopy(CRASHCAUSE.pulls)
+    template = pulls[0]["commits"]["nodes"][0]
+    pulls[0]["commits"]["nodes"] = [
+        template | {"commit": template["commit"] | {"messageHeadline": headline, "messageBody": body}}
+        for headline, body in messages
+    ]
+    return by_url(documents_from(crashcause(pulls=pulls)), BUILT_PULL)
 
-    assert pull.body.startswith("## Commits\n\n### ")
+
+def test_empty_pull_request_body_is_built_from_commits_and_files() -> None:
+    pull = by_url(documents_from(CRASHCAUSE), BUILT_PULL)
+
+    assert pull.body.startswith(
+        "## Commits\n\n- **Fix CI: golangci-lint v2 config schema, x/text + x/net security bumps**\n\n  "
+    )
+    assert pull.body.count("\n- **") == 3
     assert "## Files\n\n- `" in pull.body
-    assert pull.body.count("### ") == 3
+
+
+def test_every_commit_headline_of_a_pull_request_without_a_body_reaches_a_chunk() -> None:
+    pull = built_pull(("a: with a body", "Text."), ("b: headline only", ""), ("c: headline only", ""))
+
+    texts = [chunk.text for chunk in chunk_document(pull)]
+
+    for headline in ("a: with a body", "b: headline only", "c: headline only"):
+        assert any(headline in text for text in texts), headline
+
+
+def test_a_commit_body_stays_under_its_headline_even_with_headings_of_its_own() -> None:
+    pull = built_pull(
+        ("a: first", "## Why\n\nBecause.\n\n```\ncode\n```"), ("b: second", ""), ("c: third", "One.\nTwo.")
+    )
+
+    assert [chunk.section for chunk in chunk_document(pull)] == ["Commits", "Files"]
+    assert pull.body.startswith(
+        "## Commits\n\n"
+        "- **a: first**\n\n  ## Why\n\n  Because.\n\n  ```\n  code\n  ```\n"
+        "- **b: second**\n"
+        "- **c: third**\n\n  One.\n  Two.\n\n"
+        "## Files"
+    )
+
+
+def test_a_long_commit_list_is_split_without_losing_or_repeating_a_headline() -> None:
+    headlines = [f"change number {index}" for index in range(40)]
+    pull = built_pull(*((headline, "") for headline in headlines))
+
+    commits = [chunk.text for chunk in chunk_document(pull, max_tokens=100) if chunk.section == "Commits"]
+
+    assert len(commits) > 1
+    assert sorted(headline for text in commits for headline in headlines if f"**{headline}**" in text) == sorted(
+        headlines
+    )
 
 
 def test_empty_pull_request_without_files_lists_only_commits() -> None:
     pulls = edited(CRASHCAUSE.pulls, 0, files={"totalCount": 0, "nodes": []})
 
-    pull = by_url(documents_from(crashcause(pulls=pulls)), "https://github.com/ryckakas/crashcause/pull/1")
+    pull = by_url(documents_from(crashcause(pulls=pulls)), BUILT_PULL)
 
     assert "## Files" not in pull.body
 
@@ -184,7 +234,7 @@ def test_pull_requests_cached_without_oids_still_load() -> None:
 
     documents = documents_from(crashcause(pulls=pulls))
 
-    assert by_url(documents, "https://github.com/ryckakas/crashcause/pull/1").kind is DocumentKind.PR
+    assert by_url(documents, BUILT_PULL).kind is DocumentKind.PR
 
 
 def test_commit_headline_is_rejoined_and_claude_trailer_stripped() -> None:
