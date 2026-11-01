@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import FakeEmbedder
+from conftest import DocumentFactory, FakeEmbedder
 
-from repolore.chunking import Chunk
+from repolore.chunking import Chunk, chunk_document
 from repolore.store import (
     EmbeddingCache,
     Filters,
@@ -22,6 +22,7 @@ from repolore.store import (
     keyword_matches,
     nearest,
     repo_counts,
+    source_passages,
     write_index,
 )
 
@@ -239,3 +240,28 @@ def test_changed_settings_reports_only_existing_differences(index: sqlite3.Conne
 def test_changed_settings_accepts_an_empty_index(tmp_path: Path) -> None:
     with closing(connect(tmp_path / "empty.db")) as db:
         assert changed_settings(db, {"model_id": "other"}) == {}
+
+
+def test_a_sources_passages_come_in_document_order_past_ten_sections(
+    tmp_path: Path, make_document: DocumentFactory, fake_embedder: FakeEmbedder
+) -> None:
+    document = make_document(1, "\n\n".join(f"## Step {step}\nDo step {step}." for step in range(12)))
+    chunks = [*chunk_document(make_document(10, "## Other\nAnother PR.")), *chunk_document(document)]
+    with closing(connect(tmp_path / "db" / "steps.db")) as db:
+        write_index(db, chunks, fake_embedder.embed_documents([c.embedded_text for c in chunks]), "fake", 64)
+
+        passages = source_passages(db, document.url)
+
+    assert [passage.section for passage in passages] == [f"Step {step}" for step in range(12)]
+    assert passages[0].header == "octo/repo · PR #1 · Change 1 · Step 0"
+    assert passages[0].text == "## Step 0\n\nDo step 0."
+    assert (passages[0].title, passages[0].kind, passages[0].author) == ("Change 1", "pr", "octocat")
+
+
+def test_a_url_that_isnt_indexed_has_no_passages(index: sqlite3.Connection) -> None:
+    assert source_passages(index, "https://github.com/octo/repo/pull/404") == []
+
+
+def test_source_passages_explains_an_empty_index(tmp_path: Path) -> None:
+    with closing(connect(tmp_path / "empty.db")) as db, pytest.raises(StoreError, match="index is empty"):
+        source_passages(db, "https://github.com/octo/repo/pull/1")

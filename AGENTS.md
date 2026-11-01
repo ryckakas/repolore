@@ -163,10 +163,13 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `evals/runs.py` (each run saved under `<data-dir>/evals/runs/`, compared with the previous one on the same
   questions). A run also records the index size and the median search time per question, which is how search
   latency is measured at a given corpus size. `EXPERIMENTS.md` logs every retrieval experiment, aggregate numbers only.
-- `mcp_server.py` defines the `search`, `list_repos` and `refresh` tools (official `mcp` SDK v2 with `MCPServer`;
-  the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so `repolore build` can rewrite it
-  meanwhile. Its server loads the index's model on a background thread at start (about 35 s warm here, mostly
-  importing transformers), so the first search finds it ready or waits on `LocalEmbedder`'s load lock.
+- `mcp_server.py` defines the `search`, `read`, `list_repos` and `refresh` tools (official `mcp` SDK v2 with
+  `MCPServer`; the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so `repolore build`
+  can rewrite it meanwhile. Its server loads the index's model on a background thread at start (about 35 s warm here,
+  mostly importing transformers), so the first search finds it ready or waits on `LocalEmbedder`'s load lock.
+  `search` cuts each passage at 1,500 characters; `read` returns a source's chunks in document order with their
+  headers, about 12,000 characters per call (or one passage, when that is longer), so one long PR can't flood the
+  context.
   `list_repos` also returns the index's `built_at` and the last refresh's status. Never print to stdout in code a
   stdio server runs: stdout carries the protocol.
 - `relay.py` is `repolore-mcp`, which every Claude Code session starts over stdio. It answers the MCP handshake

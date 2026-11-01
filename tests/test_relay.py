@@ -168,7 +168,7 @@ async def test_tools_are_forwarded_to_the_shared_server_past_any_proxy(
     repos = await forwarder.call_tool(None, _params("list_repos", {}))
     failed = await forwarder.call_tool(None, _params("search", {}))
 
-    assert {tool.name for tool in tools.tools} == {"search", "list_repos", "refresh"}
+    assert {tool.name for tool in tools.tools} == {"search", "read", "list_repos", "refresh"}
     assert repos.structured_content is not None
     assert [repo["repo"] for repo in repos.structured_content["repos"]] == ["octo/charts", "octo/repo"]
     assert failed.is_error
@@ -359,7 +359,7 @@ async def test_the_relay_answers_the_handshake_itself_and_forwards_tools(shared_
     async with Client(server) as client:
         tools = await client.list_tools()
 
-    assert {tool.name for tool in tools.tools} == {"search", "list_repos", "refresh"}
+    assert {tool.name for tool in tools.tools} == {"search", "read", "list_repos", "refresh"}
 
 
 def test_a_server_still_starting_is_awaited_not_started_again(tmp_path: Path) -> None:
