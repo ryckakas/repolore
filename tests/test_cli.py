@@ -249,12 +249,12 @@ def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch:
 
     assert result.exit_code == 0
     lines = [line.split() for line in result.output.splitlines()]
-    assert lines[0] == ["7", "documents,", "24", "chunks"]
-    assert lines[1:7] == [["pr", "5"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["plan", "0"]]
+    assert lines[0] == ["7", "documents,", "22", "chunks"]
+    assert lines[1:7] == [["pr", "3"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["plan", "0"]]
     assert lines[7] == ["tokens", "(voyage-4-nano)"]
     buckets = ["1-50", "51-100", "101-200", "201-400", "401-800", "801-2048", "2049-8192", ">8192"]
     assert [line[0] for line in lines[8:16]] == buckets
-    assert sum(int(line[1]) for line in lines[8:16]) == 24
+    assert sum(int(line[1]) for line in lines[8:16]) == 22
     assert result.output.splitlines()[16] == "Chunks hold at most 8192 tokens; 0 sections were split to fit."
     assert result.output.count("\n--- https://github.com/ryckakas/crashcause/") == 2
 
@@ -292,9 +292,9 @@ def test_build_embeds_new_chunks_and_reuses_them_next_time(cached_crashcause: Pa
     second = runner.invoke(app, ["build", "--db", "experiment"])
 
     assert first.exit_code == 0
-    assert "24 chunks indexed in" in first.output
-    assert "24 embedded, 0 reused" in first.output
-    assert "0 embedded, 24 reused" in second.output
+    assert "22 chunks indexed in" in first.output
+    assert "22 embedded, 0 reused" in first.output
+    assert "0 embedded, 22 reused" in second.output
     assert (cached_crashcause / "db" / "experiment.db").exists()
     assert "Chunks hold at most 8192 tokens; 0 sections were split to fit." in first.output
 
@@ -461,7 +461,7 @@ def test_eval_scores_saves_and_lists_misses(eval_questions: Path, cached_crashca
     assert "  factual       0.500  (2)" in lines
     assert any(line.startswith("top score: ") for line in lines)
     assert any(
-        line.startswith("search: median ") and line.endswith("over 24 chunks, query embedding included")
+        line.startswith("search: median ") and line.endswith("over 22 chunks, query embedding included")
         for line in lines
     )
     assert "miss: missing-source: What did PR 999 change?" in result.output

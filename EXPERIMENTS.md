@@ -196,3 +196,30 @@ still counts apart from its PR.
 Decision: the MCP `search` tool returns one chunk per source by default, and Claude Code can pass
 `distinct: false` for a document's other sections. The CLI keeps it as the `--distinct` option, so `search` and
 `eval` without it keep measuring plain ranking.
+
+## Headline-only commits (2026-11-01)
+
+A PR without a description is indexed from its commits. Each commit was a `###` heading over its message, and a
+heading with nothing under it gets no chunk, so every commit with only a headline was left out (#80): 140 of the
+151 commits in the 99 PRs indexed this way. Those commits aren't indexed on their own either, because they belong to
+a PR. The commits are now a list under `## Commits`, one `- **<headline>**` item each with its message body indented
+under it, so every headline reaches a chunk. Each of the 99 PRs now has one `Commits` chunk, where they had 11 commit
+chunks between them before; the index grew from 3,644 to 3,732 chunks, and 99 were embedded.
+
+| Tuning set (35) | recall@5 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| Vector, before | 0.857 | 0.911 | 0.814 | 0.805 |
+| Vector, after | 0.826 | 0.911 | 0.812 | 0.803 |
+| Vector, one chunk per source, before | 0.904 | 0.935 | 0.818 | 0.822 |
+| Vector, one chunk per source, after | 0.904 | 0.935 | 0.816 | 0.819 |
+
+The held-out set (5) didn't change: recall@5 0.750 plain and 1.000 with one chunk per source.
+
+Two questions each ranked one expected source a place lower, and nothing else moved. One of them fell from 5 to 6,
+which is the whole recall@5 change (1 of 32 answerable questions). In both, what moved ahead was a newly indexed
+commit list on the question's topic, not a labelled source. The eval can't show the gain, because no expected source
+is a commit that was missing: those couldn't be found to be labelled. The question that found the bug shows it: a
+keyword search now ranks the PR holding the commit 4th, where before no search could return that commit at all.
+
+Decision: keep the list. A one-rank loss to on-topic chunks is the labelling gap noted above, not worse retrieval,
+and a commit message no search can reach is a correctness bug.

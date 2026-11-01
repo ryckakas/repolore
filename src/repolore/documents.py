@@ -2,6 +2,7 @@ import re
 from collections.abc import Iterable, Iterator
 from datetime import datetime
 from enum import StrEnum
+from textwrap import indent
 
 from pydantic import BaseModel, ConfigDict
 
@@ -77,7 +78,7 @@ def _pull_documents(repo: RepoInfo, pulls: Iterable[PullRequest]) -> Iterator[Do
         if _is_bot(pull.author):
             continue
         body, ai_assisted = _strip_claude_trailers(_strip_html_comments(pull.body))
-        commits = [_commit_message(commit) for commit in pull.commits.nodes]
+        commits = [_commit_item(commit) for commit in pull.commits.nodes]
         yield Document(
             url=pull.url,
             repo=repo.name_with_owner,
@@ -95,17 +96,20 @@ def _pull_documents(repo: RepoInfo, pulls: Iterable[PullRequest]) -> Iterator[Do
 
 
 def _synthetic_pull_body(pull: PullRequest, commits: list[tuple[str, bool]]) -> str:
-    sections = ["## Commits", *(message for message, _ in commits)]
+    sections = ["## Commits", "\n".join(item for item, _ in commits)]
     if pull.files.nodes:
         sections += ["## Files", "\n".join(f"- `{file.path}`" for file in pull.files.nodes)]
     return "\n\n".join(sections)
 
 
-def _commit_message(pull_commit: PullRequestCommit) -> tuple[str, bool]:
+def _commit_item(pull_commit: PullRequestCommit) -> tuple[str, bool]:
     commit = pull_commit.commit
     headline, body = _rejoin_headline(commit.message_headline, commit.message_body)
     body, ai_assisted = _strip_claude_trailers(body)
-    return "\n\n".join(part for part in (f"### {headline}", body) if part), ai_assisted
+    # A list item, not a heading: a heading with nothing under it gets no chunk, and the indented body keeps any
+    # headings of its own inside the item instead of starting sections.
+    item = f"- **{headline}**"
+    return (f"{item}\n\n{indent(body, '  ')}" if body else item), ai_assisted
 
 
 def _review_documents(repo: RepoInfo, pulls: Iterable[PullRequest], include_bots: bool) -> Iterator[Document]:
