@@ -50,7 +50,15 @@ async def test_tools_are_listed_as_read_only(index_file: Path, fake_embedder: Fa
     assert all(
         (annotations := tools[name].annotations) and annotations.read_only_hint for name in ("search", "list_repos")
     )
-    assert set(tools["search"].input_schema["properties"]) == {"query", "repo", "kind", "author", "k", "mode"}
+    assert set(tools["search"].input_schema["properties"]) == {
+        "query",
+        "repo",
+        "kind",
+        "author",
+        "k",
+        "mode",
+        "distinct",
+    }
 
 
 async def test_initialize_reports_the_package_version(index_file: Path, fake_embedder: FakeEmbedder) -> None:
@@ -69,9 +77,9 @@ async def test_search_modes(
     original_search = mcp_server.search_index
     seen = []
 
-    def record_mode(db, embedder, query, k, filters, mode=mcp_server.Mode.VECTOR, reranker=None):
+    def record_mode(db, embedder, query, k, filters, mode=mcp_server.Mode.VECTOR, reranker=None, distinct=False):
         seen.append(mode)
-        return original_search(db, embedder, query, k, filters, mode, reranker)
+        return original_search(db, embedder, query, k, filters, mode, reranker, distinct=distinct)
 
     monkeypatch.setattr(mcp_server, "search_index", record_mode)
     async with Client(server(index_file, fake_embedder)) as client:
@@ -121,6 +129,31 @@ async def test_search_filters(index_file: Path, fake_embedder: FakeEmbedder) -> 
     assert [hit["url"] for hit in result.structured_content["results"]] == [
         "https://github.com/octo/repo/blob/main/README.md"
     ]
+
+
+@pytest.mark.parametrize(("distinct", "urls"), [(None, 2), (False, 2), (True, 3)])
+async def test_search_repeats_a_source_unless_distinct(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory, distinct: bool | None, urls: int
+) -> None:
+    documents = [
+        make_document(9, "## Retry\nregistry backoff\n\n## Timeout\nregistry backoff timeout"),
+        make_document(1, "The solar battery reports power over Modbus TCP."),
+        make_document(2, "Document the snake_case config keys."),
+    ]
+    chunks = [chunk for document in documents for chunk in chunk_document(document)]
+    path = tmp_path / "db" / "sections.db"
+    with closing(connect(path)) as db:
+        vectors = fake_embedder.embed_documents([chunk.embedded_text for chunk in chunks])
+        write_index(db, chunks, vectors, fake_embedder.model_id, fake_embedder.dim)
+
+    arguments = {"query": "registry backoff", "k": 3} | ({} if distinct is None else {"distinct": distinct})
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("search", arguments)
+
+    assert result.structured_content is not None
+    hits = result.structured_content["results"]
+    assert len(hits) == 3
+    assert len({hit["url"] for hit in hits}) == urls
 
 
 async def test_long_passages_are_shortened(
