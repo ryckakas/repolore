@@ -1,14 +1,24 @@
 import hashlib
+import os
 import re
-from collections.abc import Callable, Sequence
+import threading
+import time
+from collections.abc import Callable, Generator, Sequence
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from repolore import shared_server as shared_server_module
 from repolore.chunking import Chunk, chunk_document
 from repolore.documents import Document, DocumentKind, Visibility
 from repolore.embedding import Vectors
+from repolore.paths import AppPaths
+from repolore.server_state import Discovery, ServerFiles, is_running, read_discovery, request_stop
+from repolore.shared_server import run_shared
+from repolore.store import connect, write_index
 
 FAKE_DIM = 64
 
@@ -94,3 +104,57 @@ def corpus(make_document: DocumentFactory) -> list[Chunk]:
         ),
     ]
     return [chunk for document in documents for chunk in chunk_document(document)]
+
+
+@pytest.fixture
+def index_file(tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder) -> Path:
+    path = tmp_path / "db" / "default.db"
+    with closing(connect(path)) as db:
+        vectors = fake_embedder.embed_documents([chunk.embedded_text for chunk in corpus])
+        write_index(db, corpus, vectors, fake_embedder.model_id, fake_embedder.dim)
+    return path
+
+
+@pytest.fixture
+def data_paths(index_file: Path) -> AppPaths:
+    data_dir = index_file.parent.parent
+    return AppPaths(config_file=data_dir / "repolore.toml", questions_file=data_dir / "q.yaml", data_dir=data_dir)
+
+
+class SharedServer:
+    """A real shared server over a FakeEmbedder index, on a thread, on loopback."""
+
+    def __init__(self, paths: AppPaths, embedder: FakeEmbedder, idle_minutes: float = 60) -> None:
+        self.files = ServerFiles(paths.data_dir, "default")
+        self.outcome: list[bool] = []
+        self._thread = threading.Thread(
+            target=lambda: self.outcome.append(run_shared(paths, "default", idle_minutes, lambda _: embedder)),
+            daemon=True,
+        )
+
+    def start(self) -> Discovery:
+        self._thread.start()
+        deadline = time.monotonic() + 30
+        while (found := read_discovery(self.files)) is None or found.pid != os.getpid():
+            assert time.monotonic() < deadline, "The shared server didn't start."
+            time.sleep(0.05)
+        return found
+
+    def stop(self) -> None:
+        request_stop(self.files)
+        self.join()
+
+    def join(self, seconds: float = 30) -> None:
+        self._thread.join(seconds)
+        assert not self._thread.is_alive(), "The shared server didn't exit."
+
+
+@pytest.fixture
+def shared_server(
+    data_paths: AppPaths, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> Generator[SharedServer]:
+    monkeypatch.setattr(shared_server_module, "WATCH_SECONDS", 0.05)
+    server = SharedServer(data_paths, fake_embedder)
+    yield server
+    if server.files.lock.exists() and is_running(server.files):
+        server.stop()

@@ -99,15 +99,15 @@ def test_a_log_without_a_recorded_refresh_is_not_shown(tmp_path: Path) -> None:
     assert refresh_status(tmp_path).log_tail == []
 
 
-Spawned = list[tuple[list[str], IO[str], Mapping[str, str]]]
+Spawned = list[tuple[list[str], IO[str], Mapping[str, str], Path]]
 
 
 @pytest.fixture
 def spawned(monkeypatch: pytest.MonkeyPatch) -> Spawned:
     calls: Spawned = []
 
-    def spawn(command: list[str], *, stdout: IO[str], env: Mapping[str, str]) -> None:
-        calls.append((command, stdout, env))
+    def spawn(command: list[str], *, stdout: IO[str], env: Mapping[str, str], cwd: Path) -> None:
+        calls.append((command, stdout, env, cwd))
 
     monkeypatch.setattr(refresh, "spawn_detached", spawn)
     return calls
@@ -118,8 +118,12 @@ def test_a_refresh_is_started_as_a_quiet_detached_process(tmp_path: Path, spawne
 
     assert start_refresh(data_dir, "experiment")
 
-    [(command, stdout, env)] = spawned
-    assert command == [sys.executable, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", "experiment"]
+    [(command, stdout, env, cwd)] = spawned
+    assert command == [
+        *[sys.executable, "-P", "-m", "repolore", "--data-dir", str(data_dir)],
+        *["refresh", "--db", "experiment"],
+    ]
+    assert cwd == data_dir
     assert stdout.name == str(data_dir / LOG_FILE)
     assert env["TQDM_DISABLE"] == "1"
     assert env["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"

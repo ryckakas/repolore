@@ -41,6 +41,7 @@ uv run repolore build       # embed what changed and write the index (<data-dir>
                             # threads started by bots; a left-out option keeps the index's last value)
 uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
+uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --distinct, --show-misses,
                             # --holdout
 uv run ruff format          # format
@@ -160,28 +161,46 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `evals/runs.py` (each run saved under `<data-dir>/evals/runs/`, compared with the previous one on the same
   questions). A run also records the index size and the median search time per question, which is how search
   latency is measured at a given corpus size. `EXPERIMENTS.md` logs every retrieval experiment, aggregate numbers only.
-- `mcp_server.py` serves `search`, `list_repos` and `refresh` to Claude Code over stdio (`repolore-mcp`, official
-  `mcp` SDK v2 with `MCPServer`; the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so
-  `repolore build` can rewrite it meanwhile. It loads the index's model on a background thread at start (about
-  35 s warm here, mostly importing transformers), so the first search finds it ready or waits on
-  `LocalEmbedder`'s load lock; `--no-preload` defers the load to the first search.
-  `list_repos` also returns the index's `built_at` and the last refresh's status. Never print to stdout in code the
-  server runs: stdout carries the protocol.
+- `mcp_server.py` defines the `search`, `list_repos` and `refresh` tools (official `mcp` SDK v2 with `MCPServer`;
+  the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so `repolore build` can rewrite it
+  meanwhile. Its server loads the index's model on a background thread at start (about 35 s warm here, mostly
+  importing transformers), so the first search finds it ready or waits on `LocalEmbedder`'s load lock.
+  `list_repos` also returns the index's `built_at` and the last refresh's status. Never print to stdout in code a
+  stdio server runs: stdout carries the protocol.
+- `relay.py` is `repolore-mcp`, which every Claude Code session starts over stdio. It answers the MCP handshake
+  itself and forwards `tools/list` and `tools/call` to one shared server per data dir and index, through an MCP client
+  over Streamable HTTP, a new connection per call. It starts that server when none runs, replaces one of another
+  version, retries a call once if the server went away, and asks the session to reconnect in `/mcp` when repolore
+  was upgraded under it. It imports only the MCP SDK and the small state modules, never torch, numpy or sqlite-vec:
+  about 70 MB per session instead of the model's 1.8 GB. `--standalone` serves the tools from the relay process
+  itself, model included, as before.
+- `shared_server.py` is `repolore server run`: the tools over Streamable HTTP from our own `uvicorn.Server` on
+  127.0.0.1, port 0. It holds `server-<db>.lock` for its life, writes its port and a bearer token new at every start to
+  `server-<db>.json` (readable by the user only), and needs that token on every request; the SDK checks Host and
+  Origin against DNS rebinding. It exits on `repolore server stop` (a `server-<db>.stop` file) or 10 minutes after
+  the last relay left. `server_state.py` has those files; each relay holds an OS lock in `clients/<db>/` while it
+  runs, so a killed one drops out by itself.
 - `refresh.py` runs one refresh at a time. `repolore refresh` holds an OS file lock (`<data-dir>/refresh.lock`, via
   `filelock`, so a killed run leaves no stale lock) and records its start, end and outcome in `refresh.json`. The MCP
   `refresh` tool doesn't refresh in the server: it starts `python -m repolore refresh` as a detached process that
   writes to `refresh.log` and outlives the session, so the server loads no second model and blocks no worker thread.
-- `processes.py` starts those detached processes. On Windows, Claude Code stops a session's server with
-  `taskkill /T /F`, which kills every process still linked to it by parent PID, whatever the creation flags, so a
-  short-lived intermediate starts the real process and exits before `spawn_detached` returns.
+- `processes.py` starts those detached processes, the refresh and the shared server, in the data dir and with
+  `python -P`, so the session's project directory is neither locked nor on their import path. On Windows, Claude Code
+  stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
+  whatever the creation flags, so a short-lived intermediate starts the real process and exits before
+  `spawn_detached` returns.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
 
-Nothing is async: the MCP SDK runs the plain `def` tools on worker threads, and the rest of the pipeline is
-synchronous on purpose. `LocalEmbedder` locks its lazy model load because those threads can search in parallel.
+Nothing is async except the relay's forwarding and the shared server's watcher, which live on the SDK's event loop:
+the MCP SDK runs the plain `def` tools on worker threads (40, shared by every session), and the rest of the pipeline
+is synchronous on purpose. `LocalEmbedder` locks its lazy model load because those threads can search in parallel.
 
-While a Claude Code session runs the server, files in `.venv` are open, and `uv sync` / `uv add` can fail with
-"Access is denied". Disable the server in `/mcp` or close those sessions before changing dependencies or adding a
-tag, since a new tag reinstalls the editable package.
+While a Claude Code session runs `repolore-mcp`, or the shared server runs, files in `.venv` are open, and
+`uv sync` / `uv add` can fail with "Access is denied". Disable the server in `/mcp` or close those sessions, and run
+`repolore server stop`, before changing dependencies or adding a tag, since a new tag reinstalls the editable package.
+Until then, `uv run --no-sync` runs the checkout's code without reinstalling. A running shared server keeps the code
+it started with, since the editable install's version changes only with tags: after changing tool or server code,
+run `repolore server stop`.
 
 ## Comments
 
@@ -195,7 +214,8 @@ site. Never a "what" comment restating what the code already says.
 ## Testing conventions
 
 Tests live in `tests/`, one file per module (`test_<module>.py`), using plain pytest functions and
-fixtures. **Tests never touch the network by default.** HTTP is faked with `httpx.MockTransport`
+fixtures. **Tests never touch the network by default**; servers on 127.0.0.1 (port 0) are fine, such as the shared
+server the relay tests run on a thread. HTTP to other hosts is faked with `httpx.MockTransport`
 fed from saved JSON samples, and embeddings come from `FakeEmbedder` in `tests/conftest.py`, a deterministic
 bag-of-words stand-in. Fixtures in
 `tests/fixtures/` come from **public repos only**, because this repo is public; never copy data from a

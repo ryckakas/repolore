@@ -5,10 +5,11 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from filelock import FileLock, Timeout
+from filelock import Timeout
 from pydantic import BaseModel, ValidationError
 
-from repolore.processes import spawn_detached
+from repolore.locks import hold, is_locked
+from repolore.processes import SAFE_PATH, spawn_detached
 
 LOCK_FILE = "refresh.lock"
 STATUS_FILE = "refresh.json"
@@ -38,8 +39,7 @@ class RefreshStatus(BaseModel):
 def refreshing(data_dir: Path) -> Generator[None]:
     """Hold the refresh lock and record the run's start, end and outcome, so only one refresh runs at a time."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    # An OS lock, so a refresh that crashed or was killed never leaves a stale lock behind.
-    lock = FileLock(data_dir / LOCK_FILE, timeout=1, fallback_to_soft=False)
+    lock = hold(data_dir / LOCK_FILE, timeout=1)
     try:
         lock.acquire()
     except Timeout:
@@ -75,10 +75,10 @@ def start_refresh(data_dir: Path, db: str) -> bool:
     data_dir.mkdir(parents=True, exist_ok=True)
     request = data_dir / REQUEST_FILE
     request.touch()
-    command = [sys.executable, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", db]
+    command = [sys.executable, *SAFE_PATH, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", db]
     try:
         with (data_dir / LOG_FILE).open("w", encoding="utf-8") as log:
-            spawn_detached(command, stdout=log, env=os.environ | QUIET)
+            spawn_detached(command, stdout=log, env=os.environ | QUIET, cwd=data_dir)
     except OSError:
         request.unlink()
         raise
@@ -86,23 +86,12 @@ def start_refresh(data_dir: Path, db: str) -> bool:
 
 
 def _is_running(data_dir: Path) -> bool:
-    return _is_starting(data_dir) or _is_locked(data_dir)
+    return _is_starting(data_dir) or is_locked(data_dir / LOCK_FILE)
 
 
 def _is_starting(data_dir: Path) -> bool:
     request = data_dir / REQUEST_FILE
     return request.exists() and datetime.now().timestamp() - request.stat().st_mtime < STARTUP_SECONDS
-
-
-def _is_locked(data_dir: Path) -> bool:
-    lock_file = data_dir / LOCK_FILE
-    if not lock_file.exists():
-        return False
-    try:
-        with FileLock(lock_file, blocking=False, fallback_to_soft=False):
-            return False
-    except Timeout:
-        return True
 
 
 def _log_tail(data_dir: Path, status: RefreshStatus) -> list[str]:

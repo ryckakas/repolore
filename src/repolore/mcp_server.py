@@ -6,21 +6,24 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Annotated
 
-import typer
 from mcp.server import MCPServer
+from mcp.server.auth.provider import TokenVerifier
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field
 
 from repolore import __version__
 from repolore.documents import DocumentKind
 from repolore.embedding import Embedder
 from repolore.embedding.local import UnknownModelError, embedder_for
 from repolore.hub import ModelUnavailableError
+from repolore.instructions import INSTRUCTIONS
 from repolore.paths import AppPaths, resolve_paths
 from repolore.refresh import RefreshStatus, refresh_status, start_refresh
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
+from repolore.server_state import HOST
 from repolore.store import Filters, Hit, StoreError, connect_read_only, index_model, index_settings, repo_counts
 
 log = logging.getLogger(__name__)
@@ -28,14 +31,6 @@ log = logging.getLogger(__name__)
 TEXT_CHARS = 1500
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 REFRESHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
-INSTRUCTIONS = (
-    "Searches the user's own engineering history on GitHub: pull request descriptions and discussions, review "
-    "threads, issues, commits without a PR, and repository markdown (README, AGENTS.md, docs). Use it when the user "
-    "asks why or how something was decided, built, fixed or rejected in their repos, or which repo already did "
-    "something. Results are passages with GitHub permalinks; cite the permalinks. A search can wait a minute or "
-    "more while the server is still loading the embedding model. list_repos says when the index was built; when it "
-    "looks out of date for the question, the refresh tool updates it in the background."
-)
 
 
 class Result(BaseModel):
@@ -74,8 +69,15 @@ class Refresh(BaseModel):
     message: str
 
 
-def create_server(paths: AppPaths, db_name: str, embedder_for: Callable[[str], Embedder]) -> MCPServer:
-    server = MCPServer("repolore", version=__version__, instructions=INSTRUCTIONS)
+def create_server(
+    paths: AppPaths, db_name: str, embedder_for: Callable[[str], Embedder], token_verifier: TokenVerifier | None = None
+) -> MCPServer:
+    """The tools over one index; with a token verifier, HTTP requests need its bearer token."""
+    # A token verifier without an authorization server: no OAuth routes or metadata, just the bearer check.
+    auth = AuthSettings(issuer_url=AnyHttpUrl(f"http://{HOST}"), resource_server_url=None) if token_verifier else None
+    server = MCPServer(
+        "repolore", version=__version__, instructions=INSTRUCTIONS, token_verifier=token_verifier, auth=auth
+    )
     index_file = paths.index_file(db_name)
 
     @server.tool(annotations=READ_ONLY)
@@ -186,20 +188,10 @@ def _result(hit: Hit) -> Result:
     )
 
 
-def serve(
-    data_dir: Annotated[Path | None, typer.Option(help="Override the data directory.")] = None,
-    db: Annotated[str, typer.Option(help="Name of the index to serve.")] = "default",
-    preload_model: Annotated[
-        bool, typer.Option("--preload/--no-preload", help="Load the embedding model at start, not on the first search.")
-    ] = True,
-) -> None:
+def serve(data_dir: Path | None, db: str, preload_model: bool) -> None:
     """Serve search over the repolore index to an MCP client on stdin and stdout."""
     paths = resolve_paths(data_dir)
     server = create_server(paths, db, embedder_for)
     if preload_model:
         preload(paths.index_file(db), embedder_for)
     server.run()
-
-
-def main() -> None:
-    typer.run(serve)
