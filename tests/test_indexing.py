@@ -9,6 +9,7 @@ from repolore import indexing
 from repolore.chunking import Chunk, chunk_document
 from repolore.embedding.local import BGE_SMALL, VOYAGE_NANO, ModelName
 from repolore.indexing import MAX_BATCH, BuildSettings, build_index
+from repolore.progress import Phase, Progress
 from repolore.store import EmbeddingCache, cache_key, connect, index_model
 
 
@@ -121,6 +122,38 @@ def test_progress_is_logged(
         build(tmp_path, corpus, fake_embedder)
 
     assert f"embedded {len(corpus)} of {len(corpus)} chunks" in caplog.text
+
+
+def build_reporting(tmp_path: Path, chunks: list[Chunk], embedder: FakeEmbedder) -> list[Progress]:
+    reports: list[Progress] = []
+    with closing(connect(tmp_path / "test.db")) as index, closing(connect(tmp_path / "cache.db")) as cache:
+        build_index(chunks, embedder, index, EmbeddingCache(cache), report=reports.append)
+    return reports
+
+
+def test_progress_is_reported_after_each_batch_then_the_write(
+    tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(indexing, "MAX_BATCH", 2)
+
+    reports = build_reporting(tmp_path, corpus, fake_embedder)
+
+    assert reports == [
+        Progress(phase=Phase.EMBED, done=0, total=4),
+        Progress(phase=Phase.EMBED, done=2, total=4),
+        Progress(phase=Phase.EMBED, done=4, total=4),
+        Progress(phase=Phase.WRITE),
+    ]
+
+
+def test_progress_with_everything_cached_counts_nothing_to_embed(
+    tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder
+) -> None:
+    build_reporting(tmp_path, corpus, fake_embedder)
+
+    reports = build_reporting(tmp_path, corpus, fake_embedder)
+
+    assert reports == [Progress(phase=Phase.EMBED, done=0, total=0), Progress(phase=Phase.WRITE)]
 
 
 def test_an_index_without_recorded_settings_builds_with_the_defaults() -> None:

@@ -9,9 +9,11 @@ import pytest
 
 from repolore import refresh
 from repolore.processes import SpawnError
+from repolore.progress import Phase, Progress
 from repolore.refresh import (
     LOCK_FILE,
     LOG_FILE,
+    REPLACE_ATTEMPTS,
     REQUEST_FILE,
     STARTUP_SECONDS,
     RefreshRunning,
@@ -186,3 +188,114 @@ def test_the_cause_of_a_failure_is_recorded(tmp_path: Path) -> None:
         raise SystemExit(1) from RuntimeError("Nothing cached")
 
     assert refresh_status(tmp_path).error == "Nothing cached"
+
+
+def test_progress_is_saved_when_the_phase_changes(tmp_path: Path) -> None:
+    with refreshing(tmp_path, interval=3600) as report:
+        report(Progress(phase=Phase.INGEST, done=0, total=2))
+        first = refresh_status(tmp_path).progress
+        report(Progress(phase=Phase.INGEST, done=1, total=2))
+        same_phase = refresh_status(tmp_path).progress
+        report(Progress(phase=Phase.EMBED, done=0, total=9))
+        next_phase = refresh_status(tmp_path).progress
+
+    assert first == Progress(phase=Phase.INGEST, done=0, total=2)
+    assert same_phase == first
+    assert next_phase == Progress(phase=Phase.EMBED, done=0, total=9)
+    assert refresh_status(tmp_path).progress is None
+
+
+def test_progress_in_one_phase_is_saved_once_the_interval_has_passed(tmp_path: Path) -> None:
+    with refreshing(tmp_path, interval=0) as report:
+        report(Progress(phase=Phase.EMBED, done=0, total=9))
+        report(Progress(phase=Phase.EMBED, done=4, total=9))
+        during = refresh_status(tmp_path)
+
+    assert during.progress == Progress(phase=Phase.EMBED, done=4, total=9)
+    assert during.running
+    assert during.started_at == refresh_status(tmp_path).started_at
+
+
+def test_a_failed_refresh_keeps_no_progress(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError), refreshing(tmp_path) as report:
+        report(Progress(phase=Phase.EMBED, done=0, total=9))
+        raise RuntimeError("out of memory")
+
+    status = refresh_status(tmp_path)
+    assert (status.ok, status.error, status.progress) == (False, "out of memory", None)
+
+
+class HeldOpen:
+    """Path.replace refusing, as on Windows while a reader has the target open, the given number of times."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.refusals = 0
+        self.attempts = 0
+        self._replace = Path.replace
+        monkeypatch.setattr(refresh, "REPLACE_WAIT_SECONDS", 0)
+        monkeypatch.setattr(Path, "replace", lambda partial, target: self(partial, target))
+
+    def __call__(self, partial: Path, target: Path) -> Path:
+        self.attempts += 1
+        if self.attempts <= self.refusals:
+            raise PermissionError("[WinError 5] Access is denied")
+        return self._replace(partial, target)
+
+
+@pytest.fixture
+def held_open(monkeypatch: pytest.MonkeyPatch) -> HeldOpen:
+    return HeldOpen(monkeypatch)
+
+
+def test_a_status_another_process_has_open_is_replaced_once_it_is_closed(tmp_path: Path, held_open: HeldOpen) -> None:
+    held_open.refusals = REPLACE_ATTEMPTS - 1
+
+    with refreshing(tmp_path):
+        pass
+
+    assert refresh_status(tmp_path).ok
+    assert held_open.attempts == REPLACE_ATTEMPTS + 1
+
+
+def test_a_status_still_open_after_every_attempt_fails_the_refresh(tmp_path: Path, held_open: HeldOpen) -> None:
+    held_open.refusals = REPLACE_ATTEMPTS
+
+    with pytest.raises(PermissionError), refreshing(tmp_path):
+        pass
+
+    assert refresh_status(tmp_path) == RefreshStatus()
+    assert held_open.attempts == REPLACE_ATTEMPTS
+
+
+def test_progress_that_cant_be_saved_is_logged_and_the_refresh_goes_on(
+    tmp_path: Path, held_open: HeldOpen, caplog: pytest.LogCaptureFixture
+) -> None:
+    with refreshing(tmp_path) as report:
+        held_open.refusals = held_open.attempts + REPLACE_ATTEMPTS
+        report(Progress(phase=Phase.EMBED, done=0, total=9))
+        held_open.refusals = 0
+
+    assert "progress not saved: [WinError 5] Access is denied" in caplog.text
+    assert refresh_status(tmp_path).ok
+
+
+def test_the_end_of_a_phase_is_saved_within_the_interval(tmp_path: Path) -> None:
+    with refreshing(tmp_path, interval=3600) as report:
+        report(Progress(phase=Phase.INGEST, done=0, total=2))
+        report(Progress(phase=Phase.INGEST, done=1, total=2))
+        report(Progress(phase=Phase.INGEST, done=2, total=2))
+        ended = refresh_status(tmp_path).progress
+
+    assert ended == Progress(phase=Phase.INGEST, done=2, total=2)
+
+
+def test_a_status_being_replaced_reads_as_no_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with refreshing(tmp_path):
+        pass
+
+    def being_replaced(*_: object, **__: object) -> str:
+        raise PermissionError("[WinError 32] The process cannot access the file")
+
+    monkeypatch.setattr(Path, "read_text", being_replaced)
+
+    assert refresh_status(tmp_path) == RefreshStatus()

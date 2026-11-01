@@ -3,8 +3,8 @@ import json
 import logging
 import shutil
 import sys
-from collections.abc import Sequence
-from contextlib import closing
+from collections.abc import Generator, Sequence
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,6 +21,7 @@ from repolore.embedding.local import BGE_SMALL, LocalModel
 from repolore.hub import ModelUnavailableError
 from repolore.locks import hold
 from repolore.paths import AppPaths, resolve_paths
+from repolore.progress import Phase, Progress, Report
 from repolore.refresh import refresh_status, refreshing
 from repolore.server_state import ServerFiles, registered
 from repolore.sources.github import GitHubClient, GitHubError
@@ -159,7 +160,7 @@ def test_online_ingest_passes_the_discovery_and_closes_the_client(
     discovery = Discovery(login="octocat", included=[RepoSource("octo/repo", Scope.OWNED)], excluded=[])
     ingest_setup(tmp_path, monkeypatch, 'exclude = ["octo/old"]')
     configs = online(monkeypatch, discovery)
-    monkeypatch.setattr("repolore.cli.ingest_repos", lambda found, _, __, full: calls.append((found, full)) or [])
+    monkeypatch.setattr("repolore.cli.ingest_repos", lambda found, _, __, full, ___: calls.append((found, full)) or [])
     monkeypatch.setattr(GitHubClient, "close", lambda _: closed.append(True))
 
     result = runner.invoke(app, ["ingest", "--full"])
@@ -732,17 +733,49 @@ def test_refresh_ingests_then_rebuilds_with_the_recorded_settings(
 ) -> None:
     online(monkeypatch)
     fetched: list[bool] = []
-    monkeypatch.setattr("repolore.cli.ingest_repos", lambda _, __, ___, full: fetched.append(full) or [])
+    seen: list[Progress | None] = []
+
+    def fetch(_: object, __: object, ___: object, full: bool, report: Report) -> list[Document]:
+        fetched.append(full)
+        seen.append(refresh_status(cached_crashcause).progress)
+        report(Progress(phase=Phase.INGEST, done=1, total=2))
+        seen.append(refresh_status(cached_crashcause).progress)
+        return []
+
+    monkeypatch.setattr("repolore.cli.ingest_repos", fetch)
     runner.invoke(app, ["build", "--max-tokens", "50"])
 
     result = runner.invoke(app, ["refresh"])
 
     assert result.exit_code == 0
     assert fetched == [False]
+    assert seen == [Progress(phase=Phase.DISCOVER), Progress(phase=Phase.INGEST, done=1, total=2)]
     assert "Building with sections split at 50 tokens, bot reviews excluded, voyage-4-nano." in result.output
     assert "0 embedded" in result.output
     status = refresh_status(cached_crashcause)
-    assert (status.running, status.ok, status.error) == (False, True, None)
+    assert (status.running, status.ok, status.error, status.progress) == (False, True, None, None)
+
+
+def test_refresh_reports_every_phase(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    online(monkeypatch)
+    reports: list[Progress] = []
+
+    @contextmanager
+    def recording(_: Path) -> Generator[Report]:
+        yield reports.append
+
+    monkeypatch.setattr("repolore.cli.refreshing", recording)
+    monkeypatch.setattr(
+        "repolore.cli.ingest_repos", lambda _, __, ___, ____, report: report(Progress(phase=Phase.INGEST)) or []
+    )
+
+    result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 0
+    phases = [report.phase for report in reports]
+    assert phases[:3] == [Phase.DISCOVER, Phase.INGEST, Phase.CHUNK]
+    assert set(phases[3:-1]) == {Phase.EMBED}
+    assert phases[-1] == Phase.WRITE
 
 
 def test_a_failed_refresh_records_the_failure(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:

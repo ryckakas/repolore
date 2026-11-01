@@ -36,6 +36,7 @@ from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
 from repolore.paths import AppPaths, resolve_paths
+from repolore.progress import Phase, Progress, Report, ignore
 from repolore.refresh import RefreshRunning, refreshing
 from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
@@ -140,13 +141,14 @@ def ingest(
     """Fetch the discovered repos from GitHub into the raw cache and count the documents they yield."""
     _log_progress()
     paths: AppPaths = ctx.obj
-    if offline:
-        documents = _cached_documents(paths)
-    else:
-        config = _config_or_exit(paths.config_file)
-        with _github() as client:
-            documents = ingest_repos(discover(client, config), paths.raw_dir, client, full)
-    _print_counts(documents)
+    _print_counts(_cached_documents(paths) if offline else _ingest(paths, full))
+
+
+def _ingest(paths: AppPaths, full: bool, report: Report = ignore) -> list[Document]:
+    config = _config_or_exit(paths.config_file)
+    with _github() as client:
+        report(Progress(phase=Phase.DISCOVER))
+        return ingest_repos(discover(client, config), paths.raw_dir, client, full, report)
 
 
 @contextmanager
@@ -270,13 +272,17 @@ def build(
     """
     _log_progress()
     paths: AppPaths = ctx.obj
+    _build(paths, db, _recorded_settings(paths.index_file(db)).overridden(max_tokens, bot_reviews, embedder))
+
+
+def _build(paths: AppPaths, db: str, settings: BuildSettings, report: Report = ignore) -> None:
     index_file = paths.index_file(db)
-    settings = _recorded_settings(index_file).overridden(max_tokens, bot_reviews, embedder)
     # Only a build embeds enough to gain from the GPU; queries stay on the CPU, which the MCP server's threads share.
     model = LocalEmbedder(MODELS[settings.model], use_gpu=True)
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
     typer.echo(f"Building with {settings.described(limit)}.")
     documents = _cached_documents(paths, settings.bot_reviews)
+    report(Progress(phase=Phase.CHUNK))
     with _exit_on(ModelUnavailableError):
         chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
     typer.echo(_limit_note(limit, chunks))
@@ -289,7 +295,7 @@ def build(
         if changes:
             details = ", ".join(f"{key}: {old} -> {new}" for key, (old, new) in changes.items())
             typer.echo(f"Warning: build settings changed ({details}); chunks may be re-embedded.", err=True)
-        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings.meta(limit))
+        stats = build_index(chunks, model, index, EmbeddingCache(cache), settings.meta(limit), report)
     typer.echo(
         f"{stats.chunks} chunks indexed in {index_file}, {stats.embedded} embedded, "
         f"{stats.chunks - stats.embedded} reused"
@@ -302,10 +308,11 @@ def refresh(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
 
     The MCP server's refresh tool runs this in the background; its outcome is kept in the data dir.
     """
+    _log_progress()
     paths: AppPaths = ctx.obj
-    with _exit_on(RefreshRunning), refreshing(paths.data_dir):
-        ingest(ctx)
-        build(ctx, db)
+    with _exit_on(RefreshRunning), refreshing(paths.data_dir) as report:
+        _print_counts(_ingest(paths, full=False, report=report))
+        _build(paths, db, _recorded_settings(paths.index_file(db)), report)
 
 
 def _recorded_settings(index_file: Path) -> BuildSettings:

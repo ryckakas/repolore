@@ -186,7 +186,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   the last relay left. `server_state.py` has those files; each relay holds an OS lock in `clients/<db>/` while it
   runs, so a killed one drops out by itself.
 - `refresh.py` runs one refresh at a time. `repolore refresh` holds an OS file lock (`<data-dir>/refresh.lock`, via
-  `filelock`, so a killed run leaves no stale lock) and records its start, end and outcome in `refresh.json`. The MCP
+  `filelock`, so a killed run leaves no stale lock) and records its start, end and outcome in `refresh.json`. While it
+  runs, `ingest` and `build_index` report their phase and counts (`progress.py`) through a callback, and `refresh.json`
+  gets them when the phase changes or every 2 seconds, replaced atomically for readers such as `list_repos`. The MCP
   `refresh` tool doesn't refresh in the server: it starts `python -m repolore refresh` as a detached process that
   writes to `refresh.log` and outlives the session, so the server loads no second model and blocks no worker thread.
 - `processes.py` starts those detached processes, the refresh and the shared server, in the data dir and with

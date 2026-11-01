@@ -9,6 +9,7 @@ import numpy as np
 from repolore.chunking import Chunk, chunk_limit
 from repolore.embedding import Embedder, Vectors
 from repolore.embedding.local import MODELS, ModelName, model_named_in
+from repolore.progress import Phase, Progress, Report, ignore
 from repolore.store import EmbeddingCache, cache_key, write_index
 
 TOKEN_BUDGET = 16_384
@@ -74,11 +75,13 @@ def build_index(
     db: sqlite3.Connection,
     cache: EmbeddingCache,
     settings: Mapping[str, str] | None = None,
+    report: Report = ignore,
 ) -> BuildStats:
     keys = [cache_key(embedder.model_id, chunk.embedded_text) for chunk in chunks]
     vectors = cache.get(set(keys))
     missing = {key: chunk.embedded_text for key, chunk in zip(keys, chunks, strict=True) if key not in vectors}
     done = 0
+    report(Progress(phase=Phase.EMBED, done=done, total=len(missing)))
     tokens = embedder.count_tokens(list(missing.values())) if missing else []
     for batch in _token_batches(missing, tokens):
         batch_keys = [key for key, _ in batch]
@@ -87,6 +90,8 @@ def build_index(
         vectors.update(zip(batch_keys, embedded, strict=True))
         done += len(batch)
         log.info("embedded %d of %d chunks", done, len(missing))
+        report(Progress(phase=Phase.EMBED, done=done, total=len(missing)))
+    report(Progress(phase=Phase.WRITE))
     write_index(db, chunks, _stack(vectors, keys, embedder.dim), embedder.model_id, embedder.dim, settings)
     return BuildStats(chunks=len(chunks), embedded=len(missing))
 
