@@ -88,12 +88,20 @@ def create_server(paths: AppPaths, db_name: str, embedder_for: Callable[[str], E
                 "so use it for identifiers, ticket IDs or error messages; hybrid fuses both by rank."
             ),
         ] = Mode.VECTOR,
+        distinct: Annotated[
+            bool,
+            Field(
+                description="Return at most one passage per source URL, its best section, so k passages cover k "
+                "sources. A review thread has its own URL, so it counts apart from its PR."
+            ),
+        ] = False,
     ) -> SearchResults:
         """Find the passages that best match the query, best first, with permalinks."""
         with _open(index_file) as db:
             try:
                 embedder = embedder_for(index_model(db)[0])
-                hits = search_index(db, embedder, query, k, Filters(repo=repo, kind=kind, author=author), mode)
+                filters = Filters(repo=repo, kind=kind, author=author)
+                hits = search_index(db, embedder, query, k, filters, mode, distinct=distinct)
             except (StoreError, UnknownModelError, ModelUnavailableError) as error:
                 raise ToolError(str(error)) from error
         return SearchResults(query=query, results=[_result(hit) for hit in hits])
