@@ -1,18 +1,20 @@
 import subprocess
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 from conftest import DocumentFactory, FakeEmbedder
 from mcp.client import Client
 from mcp.server import MCPServer
-from mcp.types import TextContent
+from mcp.types import CallToolResult, TextContent
 
 from repolore import __version__, mcp_server
-from repolore.chunking import chunk_document
+from repolore.chunking import Chunk, chunk_document
+from repolore.documents import Document
 from repolore.embedding.local import UnknownModelError
 from repolore.hub import ModelUnavailableError
-from repolore.mcp_server import TEXT_CHARS, create_server, preload
+from repolore.mcp_server import READ_CHARS, TEXT_CHARS, create_server, preload
 from repolore.paths import AppPaths
 from repolore.refresh import refreshing
 from repolore.store import connect, write_index
@@ -35,10 +37,11 @@ async def test_tools_are_listed_as_read_only(index_file: Path, fake_embedder: Fa
     async with Client(server(index_file, fake_embedder)) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert set(tools) == {"search", "list_repos", "refresh"}
+    assert set(tools) == {"search", "read", "list_repos", "refresh"}
     assert not any("\n" in (tool.description or "") for tool in tools.values())
     assert all(
-        (annotations := tools[name].annotations) and annotations.read_only_hint for name in ("search", "list_repos")
+        (annotations := tools[name].annotations) and annotations.read_only_hint
+        for name in ("search", "read", "list_repos")
     )
     assert set(tools["search"].input_schema["properties"]) == {
         "query",
@@ -181,7 +184,9 @@ async def test_missing_index_says_how_to_build_it(tmp_path: Path, fake_embedder:
     assert "use the refresh tool, or run `repolore refresh`, to build it" in result.content[0].text
 
 
-@pytest.mark.parametrize(("tool", "arguments"), [("search", {"query": "x"}), ("list_repos", {})])
+@pytest.mark.parametrize(
+    ("tool", "arguments"), [("search", {"query": "x"}), ("read", {"url": "x"}), ("list_repos", {})]
+)
 async def test_empty_index_says_how_to_build_it(
     tmp_path: Path, fake_embedder: FakeEmbedder, tool: str, arguments: dict[str, str]
 ) -> None:
@@ -361,3 +366,203 @@ async def test_without_an_index_list_repos_says_how_a_refresh_is_going(
     assert texts[0].endswith("to build it. A refresh is running.")
     assert texts[1].endswith("to build it. The last refresh failed: no token")
     assert texts[2].endswith("to build it.")
+
+
+def index_of(tmp_path: Path, embedder: FakeEmbedder, chunks: list[Chunk]) -> Path:
+    path = tmp_path / "db" / "read.db"
+    with closing(connect(path)) as db:
+        vectors = embedder.embed_documents([chunk.embedded_text for chunk in chunks])
+        write_index(db, chunks, vectors, embedder.model_id, embedder.dim)
+    return path
+
+
+def sized(document: Document, ordinal: int, chars: int, section: str | None = None) -> Chunk:
+    header = f"part {ordinal}"
+    text = "x" * (chars - len(header))
+    return Chunk(id=f"{document.url}::{ordinal}", document=document, section=section, header=header, text=text)
+
+
+def error_text(result: CallToolResult) -> str:
+    assert result.is_error
+    assert isinstance(result.content[0], TextContent)
+    return result.content[0].text
+
+
+CHANGELOG = (
+    "# Changelog\n\n## [0.2.0] - 2026-02-01\n\n### Changed\n\nFaster search.\n\n"
+    "## [0.1.0] - 2026-01-01\n\n### Changed\n\nFirst release.\n\n### Fixed\n\nA crash."
+)
+
+
+async def test_read_returns_a_sources_passages_in_document_order(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1, CHANGELOG)
+    path = index_of(tmp_path, fake_embedder, [*chunk_document(make_document(2)), *chunk_document(document)])
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url})
+
+    assert result.structured_content is not None
+    source = result.structured_content
+    assert {key: source[key] for key in ("title", "url", "repo", "kind", "author", "next_start")} == {
+        "title": "Change 1",
+        "url": document.url,
+        "repo": "octo/repo",
+        "kind": "pr",
+        "author": "octocat",
+        "next_start": None,
+    }
+    assert source["date"].startswith("2026-01-02")
+    assert source["passages"] == [
+        {"header": "octo/repo · PR #1 · Change 1 · Changelog > [0.2.0] - 2026-02-01 > Changed", "text": ANY},
+        {"header": "octo/repo · PR #1 · Change 1 · Changelog > [0.1.0] - 2026-01-01 > Changed", "text": ANY},
+        {"header": "octo/repo · PR #1 · Change 1 · Changelog > [0.1.0] - 2026-01-01 > Fixed", "text": ANY},
+    ]
+    assert [passage["text"] for passage in source["passages"]] == [
+        "### Changed\n\nFaster search.",
+        "### Changed\n\nFirst release.",
+        "### Fixed\n\nA crash.",
+    ]
+
+
+async def test_read_a_section_returns_every_passage_under_that_heading(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1, CHANGELOG)
+    path = index_of(tmp_path, fake_embedder, chunk_document(document))
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url, "section": "Changed"})
+
+    assert result.structured_content is not None
+    assert [passage["text"] for passage in result.structured_content["passages"]] == [
+        "### Changed\n\nFaster search.",
+        "### Changed\n\nFirst release.",
+    ]
+
+
+async def test_read_a_section_returns_all_the_pieces_of_a_split_section(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    long_section = "\n\n".join(f"Paragraph {number} of the design." for number in range(8))
+    document = make_document(1, f"## Design\n\n{long_section}\n\n## Rollout\n\nShip it.")
+    chunks = chunk_document(document, max_tokens=30)
+    path = index_of(tmp_path, fake_embedder, chunks)
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url, "section": "Design"})
+
+    assert result.structured_content is not None
+    passages = result.structured_content["passages"]
+    assert len(passages) == sum(1 for chunk in chunks if chunk.section == "Design") > 1
+    assert "Paragraph 0" in passages[0]["text"]
+    assert "Paragraph 7" in passages[-1]["text"]
+
+
+async def test_read_a_section_that_isnt_there_names_the_sections_that_are(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1, CHANGELOG)
+    path = index_of(tmp_path, fake_embedder, chunk_document(document))
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url, "section": "Removed"})
+
+    assert error_text(result).endswith("No section 'Removed' in Change 1; its sections are: Changed, Fixed.")
+
+
+async def test_read_a_url_that_isnt_indexed_says_to_pass_a_search_results(
+    index_file: Path, fake_embedder: FakeEmbedder
+) -> None:
+    async with Client(server(index_file, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": "https://github.com/octo/repo/pull/404"})
+
+    assert error_text(result).endswith("pass the url of a search result.")
+
+
+@pytest.mark.parametrize(("extra", "first_page"), [(0, 2), (1, 1)])
+async def test_read_returns_at_most_a_page_of_passages(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory, extra: int, first_page: int
+) -> None:
+    document = make_document(1)
+    half = READ_CHARS // 2
+    path = index_of(tmp_path, fake_embedder, [sized(document, 0, half), sized(document, 1, half + extra)])
+
+    async with Client(server(path, fake_embedder)) as client:
+        first = await client.call_tool("read", {"url": document.url})
+        rest = await client.call_tool("read", {"url": document.url, "start": first_page})
+
+    assert first.structured_content is not None
+    assert rest.structured_content is not None
+    assert len(first.structured_content["passages"]) == first_page
+    assert first.structured_content["next_start"] == (None if first_page == 2 else 1)
+    assert len(rest.structured_content["passages"]) == 2 - first_page
+    assert rest.structured_content["next_start"] is None
+
+
+async def test_read_returns_a_passage_longer_than_a_page_on_its_own(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1)
+    path = index_of(tmp_path, fake_embedder, [sized(document, 0, READ_CHARS * 2), sized(document, 1, 10)])
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url})
+
+    assert result.structured_content is not None
+    assert [len(passage["text"]) for passage in result.structured_content["passages"]] == [READ_CHARS * 2 - 6]
+    assert result.structured_content["next_start"] == 1
+
+
+async def test_read_pages_through_a_section_with_the_same_section(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1)
+    big = READ_CHARS * 2 // 3
+    chunks = [sized(document, 0, big, "Design"), sized(document, 1, 10, "Rollout"), sized(document, 2, big, "Design")]
+    path = index_of(tmp_path, fake_embedder, chunks)
+
+    async with Client(server(path, fake_embedder)) as client:
+        first = await client.call_tool("read", {"url": document.url, "section": "Design"})
+        assert first.structured_content is not None
+        start = first.structured_content["next_start"]
+        rest = await client.call_tool("read", {"url": document.url, "section": "Design", "start": start})
+
+    assert rest.structured_content is not None
+    assert [passage["header"] for passage in first.structured_content["passages"]] == ["part 0"]
+    assert [passage["header"] for passage in rest.structured_content["passages"]] == ["part 2"]
+    assert rest.structured_content["next_start"] is None
+
+
+async def test_read_a_section_of_a_source_without_headings_says_it_has_none(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1, "No headings here.")
+    path = index_of(tmp_path, fake_embedder, chunk_document(document))
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url, "section": "Design"})
+
+    assert error_text(result).endswith("No section 'Design' in Change 1; it has no headed sections.")
+
+
+async def test_read_past_the_last_passage_returns_no_passages(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory
+) -> None:
+    document = make_document(1, CHANGELOG)
+    path = index_of(tmp_path, fake_embedder, chunk_document(document))
+
+    async with Client(server(path, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": document.url, "start": 3})
+
+    assert result.structured_content is not None
+    assert result.structured_content["passages"] == []
+    assert result.structured_content["next_start"] is None
+
+
+async def test_read_refuses_a_negative_start(index_file: Path, fake_embedder: FakeEmbedder) -> None:
+    async with Client(server(index_file, fake_embedder)) as client:
+        result = await client.call_tool("read", {"url": "https://github.com/octo/repo/pull/1", "start": -1})
+
+    assert result.is_error

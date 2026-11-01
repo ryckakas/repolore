@@ -24,11 +24,22 @@ from repolore.refresh import RefreshStatus, refresh_status, start_refresh
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
 from repolore.server_state import HOST
-from repolore.store import Filters, Hit, StoreError, connect_read_only, index_model, index_settings, repo_counts
+from repolore.store import (
+    Filters,
+    Hit,
+    Passage,
+    StoreError,
+    connect_read_only,
+    index_model,
+    index_settings,
+    repo_counts,
+    source_passages,
+)
 
 log = logging.getLogger(__name__)
 
 TEXT_CHARS = 1500
+READ_CHARS = 12_000
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 REFRESHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 
@@ -45,12 +56,31 @@ class Result(BaseModel):
         description="Relevance to the query, higher is better; the scale depends on mode, "
         "so compare scores only within one search."
     )
-    text: str
+    text: str = Field(description=f"Cut at {TEXT_CHARS:,} characters and ended with … when longer; read has it all.")
 
 
 class SearchResults(BaseModel):
     query: str
     results: list[Result]
+
+
+class SourcePassage(BaseModel):
+    header: str = Field(description="The repo, the source and the headings the passage sits under.")
+    text: str
+
+
+class Source(BaseModel):
+    title: str
+    url: str
+    repo: str
+    kind: DocumentKind
+    author: str | None
+    date: str | None
+    passages: list[SourcePassage]
+    next_start: int | None = Field(
+        description="More passages follow: read again with this start, and the same section, to get them. "
+        "Null at the end."
+    )
 
 
 class Repo(BaseModel):
@@ -112,6 +142,24 @@ def create_server(
             except (StoreError, UnknownModelError, ModelUnavailableError) as error:
                 raise ToolError(str(error)) from error
         return SearchResults(query=query, results=[_result(hit) for hit in hits])
+
+    @server.tool(annotations=READ_ONLY)
+    def read(
+        url: Annotated[str, Field(description="The url of a search result.")],
+        section: Annotated[
+            str | None, Field(description="Only the passages under this heading, as a search result's section.")
+        ] = None,
+        start: Annotated[int, Field(ge=0, description="The first passage to return, from next_start.")] = 0,
+    ) -> Source:
+        """Read the whole text of a search result's source, passage by passage in document order, a page at a time."""
+        with _open(index_file) as db:
+            try:
+                passages = source_passages(db, url)
+            except StoreError as error:
+                raise ToolError(str(error)) from error
+        if not passages:
+            raise ToolError(f"Nothing indexed has the url {url}; pass the url of a search result.")
+        return _source(url, _in_section(passages, section), start)
 
     @server.tool(annotations=READ_ONLY)
     def list_repos() -> Repos:
@@ -185,6 +233,39 @@ def _result(hit: Hit) -> Result:
         date=hit.created_at,
         score=round(hit.score, 4),
         text=text,
+    )
+
+
+def _in_section(passages: list[Passage], section: str | None) -> list[Passage]:
+    if section is None:
+        return passages
+    if matching := [passage for passage in passages if passage.section == section]:
+        return matching
+    sections = dict.fromkeys(passage.section for passage in passages if passage.section)
+    found = f"its sections are: {', '.join(sections)}" if sections else "it has no headed sections"
+    raise ToolError(f"No section {section!r} in {passages[0].title}; {found}.")
+
+
+def _source(url: str, passages: list[Passage], start: int) -> Source:
+    first = passages[0]
+    page: list[SourcePassage] = []
+    size = 0
+    next_start = None
+    for index, passage in enumerate(passages[start:], start=start):
+        size += len(passage.header) + len(passage.text)
+        if page and size > READ_CHARS:
+            next_start = index
+            break
+        page.append(SourcePassage(header=passage.header, text=passage.text))
+    return Source(
+        title=first.title,
+        url=url,
+        repo=first.repo,
+        kind=DocumentKind(first.kind),
+        author=first.author,
+        date=first.created_at,
+        passages=page,
+        next_start=next_start,
     )
 
 

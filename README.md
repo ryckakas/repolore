@@ -67,12 +67,14 @@ and macOS 14+ on Apple Silicon.
    claude mcp add --scope user --transport stdio repolore -- repolore-mcp
    ```
 
-   Claude Code then gets `search`, `list_repos` and `refresh` tools and can answer questions about your history with
-   links to the sources. All sessions share one server that holds the model: each session's `repolore-mcp` is a small
-   relay (about 70 MB) that starts the shared server when none is running and passes the tools through. The server
-   loads the model in the background when it starts, which takes about half a minute, so only a search in that time
-   waits for it, and it exits 10 minutes after the last session closes. It listens on 127.0.0.1 only and needs a
-   token that changes every time it starts. `repolore server status` shows it and `repolore server stop` stops it.
+   Claude Code then gets `search`, `read`, `list_repos` and `refresh` tools and can answer questions about your history
+   with links to the sources. `search` cuts each passage at 1,500 characters, and `read` returns a source's whole text
+   from the index, plans and private repos included, a page at a time. All sessions share one server that holds the
+   model: each session's `repolore-mcp` is a small relay (about 70 MB) that starts the shared server when none is
+   running and passes the tools through. The server loads the model in the background when it starts, which takes
+   about half a minute, so only a search in that time waits for it, and it exits 10 minutes after the last session
+   closes. It listens on 127.0.0.1 only and needs a token that changes every time it starts.
+   `repolore server status` shows it and `repolore server stop` stops it.
    `repolore-mcp --standalone` serves from the session's own process, with its own copy of the model, as before.
 
 To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was

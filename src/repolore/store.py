@@ -73,6 +73,18 @@ class Hit:
     score: float
 
 
+@dataclass(frozen=True)
+class Passage:
+    repo: str
+    kind: str
+    title: str
+    author: str | None
+    created_at: str | None
+    section: str | None
+    header: str
+    text: str
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     return _with_vectors(sqlite3.connect(path))
@@ -240,6 +252,22 @@ def keyword_matches(db: sqlite3.Connection, query: str, k: int, filters: Filters
 def _conditions(filters: Filters) -> dict[str, str]:
     columns = {"repo": filters.repo, "kind": filters.kind, "author": filters.author}
     return {column: value for column, value in columns.items() if value is not None}
+
+
+def source_passages(db: sqlite3.Connection, url: str) -> list[Passage]:
+    """A source's chunks in document order: by the ordinal its chunk ids end with, numerically."""
+    try:
+        rows = db.execute(
+            """
+            select repo, kind, title, author, created_at, section, header, text from chunks
+            where url = :url
+            order by cast(substr(id, length(:url) + 3) as integer)
+            """,
+            {"url": url},
+        ).fetchall()
+    except sqlite3.OperationalError as error:
+        raise StoreError(EMPTY_INDEX) from error
+    return [Passage(*row) for row in rows]
 
 
 def indexed_urls(db: sqlite3.Connection) -> set[str]:
