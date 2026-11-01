@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import IO, Any
 
 INTERMEDIATE = (
@@ -10,13 +11,27 @@ INTERMEDIATE = (
 )
 
 
+# Python puts the working directory first on the import path for -c and -m, where a project's own `uvicorn.py` or
+# `secrets.py` would replace the real module; -P leaves it out.
+SAFE_PATH = ["-P"]
+
+
 class SpawnError(OSError):
     pass
 
 
-def spawn_detached(command: list[str], *, stdout: IO[str], env: Mapping[str, str]) -> None:
-    """Start a process that outlives this one and the client session that started it, writing to `stdout`."""
-    options: dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": stdout, "stderr": subprocess.STDOUT, "env": env}
+def spawn_detached(command: list[str], *, stdout: IO[str], env: Mapping[str, str], cwd: Path) -> None:
+    """Start a process that outlives this one and the client session that started it, writing to `stdout`.
+
+    It runs in `cwd`, not in the session's directory, which Windows would keep from being deleted or renamed.
+    """
+    options: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": stdout,
+        "stderr": subprocess.STDOUT,
+        "env": env,
+        "cwd": cwd,
+    }
     if sys.platform != "win32":
         subprocess.Popen(command, start_new_session=True, **options)
         return
@@ -25,7 +40,7 @@ def spawn_detached(command: list[str], *, stdout: IO[str], env: Mapping[str, str
     # the real one and exits before this returns.
     # No console window for the process or the `gh auth token` a refresh runs, and no Ctrl+C from the server's group.
     flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    intermediate = [sys.executable, "-c", INTERMEDIATE]
+    intermediate = [sys.executable, *SAFE_PATH, "-c", INTERMEDIATE]
     try:
         # Out of the client's job object, whose closing would otherwise kill the process along with the server.
         flags |= subprocess.CREATE_BREAKAWAY_FROM_JOB

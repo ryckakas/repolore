@@ -9,18 +9,20 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from conftest import FakeEmbedder
+from conftest import FakeEmbedder, SharedServer
 from typer.testing import CliRunner
 
-from repolore import __version__, cli
+from repolore import __version__, cli, relay, shared_server
 from repolore.cli import MISS_HITS, app
 from repolore.config import Config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import Document
 from repolore.embedding.local import BGE_SMALL, LocalModel
 from repolore.hub import ModelUnavailableError
-from repolore.paths import resolve_paths
+from repolore.locks import hold
+from repolore.paths import AppPaths, resolve_paths
 from repolore.refresh import refresh_status, refreshing
+from repolore.server_state import ServerFiles, registered
 from repolore.sources.github import GitHubClient, GitHubError
 from repolore.store import Hit, connect, index_settings
 
@@ -764,3 +766,79 @@ def test_refresh_refuses_while_another_runs(cached_crashcause: Path) -> None:
 
     assert result.exit_code == 1
     assert "A refresh is already running." in result.output
+
+
+def test_server_status_without_a_server(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "status"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No shared server for default is running."
+
+
+def test_server_status_while_it_starts(tmp_path: Path) -> None:
+    files = ServerFiles(tmp_path.resolve(), "default")
+
+    with hold(files.lock, timeout=0):
+        result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "status"])
+
+    assert result.output.strip() == "The shared server for default is starting."
+
+
+def test_server_status_shows_where_it_runs_and_who_uses_it(shared_server: SharedServer) -> None:
+    found = shared_server.start()
+
+    with registered(shared_server.files):
+        result = runner.invoke(app, ["--data-dir", str(shared_server.files.data_dir), "server", "status"])
+
+    assert result.exit_code == 0
+    assert f"pid {found.pid}, {found.url}, repolore {found.version}" in result.output
+    assert "Sessions connected: 1." in result.output
+    assert found.token not in result.output
+
+
+def test_server_stop_stops_it(shared_server: SharedServer) -> None:
+    shared_server.start()
+
+    result = runner.invoke(app, ["--data-dir", str(shared_server.files.data_dir), "server", "stop"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "Stopped."
+    shared_server.join()
+
+
+def test_server_stop_without_a_server(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "stop"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No shared server for default is running."
+
+
+def test_server_stop_that_is_ignored_names_the_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(relay, "STOP_SECONDS", 0.3)
+    files = ServerFiles(tmp_path.resolve(), "default")
+
+    with hold(files.lock, timeout=0):
+        result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "stop"])
+
+    assert result.exit_code == 1
+    assert "didn't stop within 0.3 seconds" in result.output
+    assert "server-default.log" in result.output
+
+
+@pytest.mark.parametrize(("serving", "exit_code"), [(True, 0), (False, 1)])
+def test_server_run_serves_the_named_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, serving: bool, exit_code: int
+) -> None:
+    runs: list[tuple[Path, str, float]] = []
+
+    def run_shared(paths: AppPaths, db: str, idle_minutes: float, _: object) -> bool:
+        runs.append((paths.data_dir, db, idle_minutes))
+        return serving
+
+    monkeypatch.setattr(shared_server, "run_shared", run_shared)
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "run", "--db", "x", "--idle-minutes", "2"])
+
+    assert result.exit_code == exit_code
+    assert runs == [(tmp_path.resolve(), "x", 2.0)]
+    assert ("already running" in result.output) is not serving

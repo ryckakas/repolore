@@ -40,6 +40,7 @@ from repolore.refresh import RefreshRunning, refreshing
 from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
+from repolore.server_state import ServerFiles, connected_relays, is_running, read_discovery
 from repolore.sources.github import GitHubClient, GitHubError, resolve_token
 from repolore.store import (
     EmbeddingCache,
@@ -462,3 +463,56 @@ def _print_misses(results: list[QuestionResult]) -> None:
             typer.echo(f"  expected {source.url} (rank {rank or f'>{SEARCH_DEPTH}'})")
         for hit in result.hits[:MISS_HITS]:
             typer.echo(f"  got      {hit.url} ({hit.score:.3f}, {hit.section or '-'})")
+
+
+server_app = typer.Typer(no_args_is_help=True, help="The shared MCP server that every session's repolore-mcp talks to.")
+app.add_typer(server_app, name="server")
+
+
+@server_app.command("run")
+def server_run(
+    ctx: typer.Context,
+    db: IndexOption = DEFAULT_INDEX,
+    idle_minutes: Annotated[float, typer.Option(help="Exit this long after the last session leaves.")] = 10,
+) -> None:
+    """Run the shared server in the foreground; repolore-mcp starts it in the background by itself."""
+    # The MCP SDK and uvicorn load only for the server commands, not for every other command.
+    from repolore.shared_server import run_shared
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    if not run_shared(ctx.obj, db, idle_minutes, embedder_for):
+        _fail(f"A shared server for {db} is already running; `repolore server stop` stops it.")
+
+
+@server_app.command("status")
+def server_status(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
+    """Show whether the shared server runs, where, which version and how many sessions use it."""
+    files = _server_files(ctx, db)
+    if not is_running(files):
+        typer.echo(f"No shared server for {db} is running.")
+        return
+    found = read_discovery(files)
+    if found is None:
+        typer.echo(f"The shared server for {db} is starting.")
+        return
+    typer.echo(f"Running since {found.started_at}: pid {found.pid}, {found.url}, repolore {found.version}.")
+    typer.echo(f"Sessions connected: {connected_relays(files)}. Log: {files.log}")
+
+
+@server_app.command("stop")
+def server_stop(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
+    """Stop the shared server; the next search from any session starts a new one."""
+    files = _server_files(ctx, db)
+    if not is_running(files):
+        typer.echo(f"No shared server for {db} is running.")
+        return
+    from repolore.relay import ServerUnavailable, stop_server
+
+    with _exit_on(ServerUnavailable):
+        stop_server(files)
+    typer.echo("Stopped.")
+
+
+def _server_files(ctx: typer.Context, db: str) -> ServerFiles:
+    paths: AppPaths = ctx.obj
+    return ServerFiles(paths.data_dir, db)

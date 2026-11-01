@@ -1,17 +1,15 @@
 import subprocess
-import sys
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 from conftest import DocumentFactory, FakeEmbedder
 from mcp.client import Client
-from mcp.client.stdio import StdioServerParameters
 from mcp.server import MCPServer
 from mcp.types import TextContent
 
 from repolore import __version__, mcp_server
-from repolore.chunking import Chunk, chunk_document
+from repolore.chunking import chunk_document
 from repolore.embedding.local import UnknownModelError
 from repolore.hub import ModelUnavailableError
 from repolore.mcp_server import TEXT_CHARS, create_server, preload
@@ -31,15 +29,6 @@ def server(index_file: Path, embedder: FakeEmbedder) -> MCPServer:
     data_dir = index_file.parent.parent
     paths = AppPaths(config_file=data_dir / "repolore.toml", questions_file=data_dir / "q.yaml", data_dir=data_dir)
     return create_server(paths, index_file.stem, lambda _: embedder)
-
-
-@pytest.fixture
-def index_file(tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder) -> Path:
-    path = tmp_path / "db" / "default.db"
-    with closing(connect(path)) as db:
-        vectors = fake_embedder.embed_documents([chunk.embedded_text for chunk in corpus])
-        write_index(db, corpus, vectors, fake_embedder.model_id, fake_embedder.dim)
-    return path
 
 
 async def test_tools_are_listed_as_read_only(index_file: Path, fake_embedder: FakeEmbedder) -> None:
@@ -250,23 +239,9 @@ async def test_list_repos_counts_passages_per_kind(index_file: Path, fake_embedd
     assert result.structured_content["refresh"]["running"] is False
 
 
-async def test_server_speaks_mcp_over_stdio(index_file: Path) -> None:
-    data_dir = index_file.parent.parent
-    params = StdioServerParameters(
-        command=sys.executable,
-        args=["-c", "from repolore.mcp_server import main; main()", "--data-dir", str(data_dir)],
-    )
-
-    async with Client(params) as client:
-        result = await client.call_tool("list_repos", {})
-
-    assert result.structured_content is not None
-    assert [repo["repo"] for repo in result.structured_content["repos"]] == ["octo/charts", "octo/repo"]
-
-
-@pytest.mark.parametrize(("options", "preloads"), [([], 1), (["--preload"], 1), (["--no-preload"], 0)])
-def test_main_serves_the_named_index_from_the_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, options: list[str], preloads: int
+@pytest.mark.parametrize(("preload_model", "preloads"), [(True, 1), (False, 0)])
+def test_serve_serves_the_named_index_from_the_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preload_model: bool, preloads: int
 ) -> None:
     served: list[Path] = []
     preloaded: list[Path] = []
@@ -280,12 +255,9 @@ def test_main_serves_the_named_index_from_the_data_dir(
 
     monkeypatch.setattr(mcp_server, "create_server", lambda paths, db_name, _: StubServer(paths, db_name))
     monkeypatch.setattr(mcp_server, "preload", lambda index_file, _: preloaded.append(index_file))
-    monkeypatch.setattr(sys, "argv", ["repolore-mcp", "--data-dir", str(tmp_path), "--db", "experiment", *options])
 
-    with pytest.raises(SystemExit) as exit_info:
-        mcp_server.main()
+    mcp_server.serve(tmp_path, "experiment", preload_model)
 
-    assert exit_info.value.code == 0
     assert served == [tmp_path.resolve() / "db" / "experiment.db"]
     assert preloaded == served * preloads
 

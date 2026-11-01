@@ -15,6 +15,7 @@ NEW_GROUP = 0x200
 BREAKAWAY = 0x01000000
 COMMAND = ["python", "-m", "repolore", "refresh"]
 ENV = {"TQDM_DISABLE": "1"}
+CWD = Path("data")
 
 
 class FakePopen:
@@ -55,7 +56,7 @@ def test_elsewhere_the_process_gets_its_own_session(
     monkeypatch.setattr(sys, "platform", platform)
     log = StringIO()
 
-    spawn_detached(COMMAND, stdout=log, env=ENV)
+    spawn_detached(COMMAND, stdout=log, env=ENV, cwd=CWD)
 
     [(command, options)] = spawned
     assert command == COMMAND
@@ -65,6 +66,7 @@ def test_elsewhere_the_process_gets_its_own_session(
         "stdout": log,
         "stderr": subprocess.STDOUT,
         "env": ENV,
+        "cwd": CWD,
     }
 
 
@@ -74,17 +76,18 @@ def test_on_windows_an_intermediate_starts_the_process_out_of_the_job_and_consol
 ) -> None:
     log = StringIO()
 
-    spawn_detached(COMMAND, stdout=log, env=ENV)
+    spawn_detached(COMMAND, stdout=log, env=ENV, cwd=CWD)
 
     flags = NO_WINDOW | NEW_GROUP | BREAKAWAY
     [(command, options)] = spawned
-    assert command == [sys.executable, "-c", INTERMEDIATE, str(flags), *COMMAND]
+    assert command == [sys.executable, "-P", "-c", INTERMEDIATE, str(flags), *COMMAND]
     assert options == {
         "creationflags": flags,
         "stdin": subprocess.DEVNULL,
         "stdout": log,
         "stderr": subprocess.STDOUT,
         "env": ENV,
+        "cwd": CWD,
     }
 
 
@@ -99,11 +102,11 @@ def test_a_job_that_forbids_breaking_away_keeps_the_process(
 
     monkeypatch.setattr(subprocess, "Popen", popen)
 
-    spawn_detached(COMMAND, stdout=StringIO(), env=ENV)
+    spawn_detached(COMMAND, stdout=StringIO(), env=ENV, cwd=CWD)
 
     [(command, options)] = spawned
     assert options["creationflags"] == NO_WINDOW | NEW_GROUP
-    assert command[3] == str(NO_WINDOW | NEW_GROUP)
+    assert command[4] == str(NO_WINDOW | NEW_GROUP)
 
 
 @pytest.mark.usefixtures("on_windows")
@@ -111,7 +114,7 @@ def test_an_intermediate_that_fails_says_what_did_not_start(spawned: list[tuple[
     FakePopen.exit_code = 1
 
     with pytest.raises(SpawnError, match=r"Couldn't start python: .* exited with code 1"):
-        spawn_detached(COMMAND, stdout=StringIO(), env=ENV)
+        spawn_detached(COMMAND, stdout=StringIO(), env=ENV, cwd=CWD)
 
 
 HEARTBEAT = (
@@ -125,7 +128,7 @@ SESSION_SERVER = (
     "import os, sys, time\n"
     "from repolore.processes import spawn_detached\n"
     "with open(sys.argv[1], 'w', encoding='utf-8') as log:\n"
-    "    spawn_detached([sys.executable, '-c', sys.argv[2]], stdout=log, env=os.environ)\n"
+    "    spawn_detached([sys.executable, '-c', sys.argv[2]], stdout=log, env=os.environ, cwd=sys.argv[3])\n"
     "print('spawned', flush=True)\n"
     "time.sleep(60)"
 )
@@ -136,7 +139,9 @@ def test_on_windows_the_process_survives_the_session_killing_its_server_tree(tmp
     log = tmp_path / "detached.log"
     pid = None
     with subprocess.Popen(
-        [sys.executable, "-c", SESSION_SERVER, str(log), HEARTBEAT], stdout=subprocess.PIPE, encoding="utf-8"
+        [sys.executable, "-c", SESSION_SERVER, str(log), HEARTBEAT, str(tmp_path)],
+        stdout=subprocess.PIPE,
+        encoding="utf-8",
     ) as server:
         try:
             assert server.stdout is not None

@@ -8,8 +8,10 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "anyio>=4.15.1",
     "filelock>=4.2.4",
     "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "huggingface-hub>=1.33.0",
     "markdown-it-py>=4.2.0",
     "mcp>=2.3,<3",
@@ -22,6 +24,7 @@ dependencies = [
     "tokenizers>=0.23.3",
     "torch>=2.14.1",
     "typer>=0.27.3",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.uv]
@@ -41,7 +44,7 @@ explicit = true
 
 [project.scripts]
 repolore = "repolore.cli:app"
-repolore-mcp = "repolore.mcp_server:main"
+repolore-mcp = "repolore.relay:main"
 
 [build-system]
 # uv_build only takes a literal version; hatch-vcs derives it from the nearest vX.Y.Z tag and the commits since.

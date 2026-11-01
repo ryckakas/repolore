@@ -68,9 +68,12 @@ and macOS 14+ on Apple Silicon.
    ```
 
    Claude Code then gets `search`, `list_repos` and `refresh` tools and can answer questions about your history with
-   links to the sources. Each session's server loads the model in the background when it starts, which takes about
-   half a minute, so only a search in that time waits for it. `repolore-mcp --no-preload` loads it on the first
-   search instead, which saves the memory in sessions that never search.
+   links to the sources. All sessions share one server that holds the model: each session's `repolore-mcp` is a small
+   relay (about 70 MB) that starts the shared server when none is running and passes the tools through. The server
+   loads the model in the background when it starts, which takes about half a minute, so only a search in that time
+   waits for it, and it exits 10 minutes after the last session closes. It listens on 127.0.0.1 only and needs a
+   token that changes every time it starts. `repolore server status` shows it and `repolore server stop` stops it.
+   `repolore-mcp --standalone` serves from the session's own process, with its own copy of the model, as before.
 
 To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was
 built with, and only one refresh runs at a time. Search keeps working meanwhile. Claude Code can do the same: the MCP
@@ -89,9 +92,12 @@ last refresh went. Claude Code asks before the first call; to allow it for good,
 }
 ```
 
-`uv tool upgrade repolore` updates repolore itself. The index and the raw GitHub responses live in the data
-directory that `repolore version` prints; they contain your private repos' content, so treat that folder like the
-repos themselves.
+`uv tool upgrade repolore` updates repolore itself. On Windows, close the Claude Code sessions using repolore (or
+disable it in `/mcp`) and run `repolore server stop` first, since running programs keep their files locked. Elsewhere,
+a session opened before the upgrade says so on its next search; reconnect repolore in `/mcp`.
+
+The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
+private repos' content, so treat that folder like the repos themselves.
 
 ## What the experiments found
 
