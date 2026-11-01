@@ -174,8 +174,19 @@ def test_human_comments_are_appended_and_bot_comments_dropped() -> None:
 
     issue = by_url(documents_from(crashcause(issues=issues)), "https://github.com/ryckakas/crashcause/issues/21")
 
-    assert issue.body.endswith("## Discussion\n\n**ghost:** First\n\n**octocat:** Second")
+    assert issue.body.endswith("\n\n# Discussion\n\n**ghost:** First\n\n**octocat:** Second")
     assert "Deploy preview" not in issue.body
+
+
+def test_the_discussion_is_not_filed_under_the_last_heading_of_the_body() -> None:
+    comments = [{"author": None, "body": "Looks good.", "createdAt": "2026-01-02T00:00:00Z"}]
+    issues = edited(
+        CRASHCAUSE.issues, 1, body="# Summary\n\nIt crashes.", comments={"totalCount": 1, "nodes": comments}
+    )
+
+    issue = by_url(documents_from(crashcause(issues=issues)), "https://github.com/ryckakas/crashcause/issues/21")
+
+    assert [chunk.header.rsplit(" · ", 1)[-1] for chunk in chunk_document(issue)] == ["Summary", "Discussion"]
 
 
 def test_bot_issue_is_dropped() -> None:
@@ -336,7 +347,7 @@ def test_external_pull_request_carries_its_discussion() -> None:
     pull = by_url(documents_from(openwb()), "https://github.com/openWB/openwb-ui-settings/pull/854")
 
     assert pull.author == "LKuemmel"
-    assert "## Discussion\n\n**benderl:**" in pull.body
+    assert "\n\n# Discussion\n\n**benderl:**" in pull.body
 
 
 def test_plans_are_private_documents_of_their_repo() -> None:

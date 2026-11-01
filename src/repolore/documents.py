@@ -238,7 +238,8 @@ def _with_discussion(body: str, comments: Iterable[Comment]) -> str:
         for comment in sorted(comments, key=lambda comment: comment.created_at)
         if not _is_bot(comment.author) and (text := _strip_html_comments(comment.body))
     ]
-    return "\n\n".join([body, "## Discussion", *replies]) if replies else body
+    # A top-level heading, so the comments never read as part of the body's last section in a chunk's heading path.
+    return "\n\n".join([body, "# Discussion", *replies]) if replies else body
 
 
 def _rejoin_headline(headline: str, body: str) -> tuple[str, str]:

@@ -223,3 +223,45 @@ keyword search now ranks the PR holding the commit 4th, where before no search c
 
 Decision: keep the list. A one-rank loss to on-topic chunks is the labelling gap noted above, not worse retrieval,
 and a commit message no search can reach is a correctness bug.
+
+## Parent headings in chunk headers (2026-11-01)
+
+Hypothesis (#79): a chunk's header named only its own heading, so a nested section lost what its parents said. In
+a CHANGELOG, every release's `### Changed` had the same header, and none said which release or date it belonged to.
+Headers now carry the heading path, the nearest heading above at each shallower level:
+`owner/repo · CHANGELOG.md · Changelog > [0.3.0] - 2026-09-24 > Changed`. The `section` stays the leaf heading.
+
+1,147 of the 3,732 chunks have parent headings (826 doc, 268 plan, 31 PR and 22 issue chunks; 777 one level deep,
+356 two, 14 three), and the build re-embedded 1,129 of them. The longest headers are still long commit titles, so
+ancestor headings aren't truncated. The `Discussion` section appended to PRs and issues is now a top-level heading,
+so a body with `#` sections can't make the comments read as part of its last one; that re-embedded 40 chunks and
+changed no rank.
+
+| Tuning set (35) | recall@5 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| Vector, before | 0.826 | 0.911 | 0.812 | 0.803 |
+| Vector, after | 0.826 | 0.919 | 0.822 | 0.815 |
+| Vector, one chunk per source, before | 0.904 | 0.935 | 0.816 | 0.819 |
+| Vector, one chunk per source, after | 0.904 | 0.945 | 0.827 | 0.834 |
+
+| Held-out set (5) | recall@5 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| Vector, before | 0.750 | 1.000 | 0.653 | 0.733 |
+| Vector, after | 0.750 | 1.000 | 0.656 | 0.737 |
+
+With one chunk per source, five tuning questions ranked an expected source higher and one ranked one lower (2 to 3);
+in plain vector search, four higher and two lower, each by one or two ranks. One held-out question moved up a rank.
+The gains are small, but every metric moved up or held on both sets.
+
+The eval set has no question that needs a version or a date, so it can't see the case the change is for. Five
+release questions about bonsai-lint's CHANGELOG (a public repo), searched before and after:
+
+- Asking what changed in 0.3.0, the top CHANGELOG hits were 0.4.0's and 0.2.1's `Changed`; now 0.3.0's `Changed` and
+  `Fixed` rank 4th and 7th, and 0.2.1's falls below them.
+- Asking what 0.5.0 fixed, 0.5.0's `Fixed` rose from 7th to 1st.
+- Asking which release made one of two changes, the right `Changed` ranked first before and after both times, but
+  only now does its header say it is 0.3.0, from 2026-09-24.
+- Asking what 0.4.1 added found 0.4.0's `Changed` before and after, so a version number alone doesn't always win.
+
+Decision: keep the heading path. A CHANGELOG or version question is worth adding to the eval set to measure this
+case directly.
