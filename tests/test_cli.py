@@ -2,10 +2,11 @@ import io
 import json
 import logging
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,8 @@ from typer.testing import CliRunner
 
 from repolore import __version__, cli, relay, shared_server
 from repolore.cli import MISS_HITS, app
-from repolore.config import Config
+from repolore.clients import McpClient, Registration, RegistrationError
+from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
 from repolore.documents import Document
@@ -25,7 +27,7 @@ from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report
 from repolore.refresh import refresh_status, refreshing
 from repolore.server_state import ServerFiles, registered
-from repolore.sources.github import GitHubClient, GitHubError
+from repolore.sources.github import GitHubClient, GitHubError, TokenInfo
 from repolore.store import Hit, connect, index_settings
 
 runner = CliRunner()
@@ -904,3 +906,276 @@ def test_server_run_serves_the_named_index(
     assert result.exit_code == exit_code
     assert runs == [(tmp_path.resolve(), "x", 2.0)]
     assert ("already running" in result.output) is not serving
+
+
+WORKING_TOKEN = TokenInfo("octocat", frozenset({"repo", "read:org"}), 4800, 5000)
+FOUND = Discovery(
+    login="octocat",
+    included=[
+        RepoSource("me/alpha", Scope.OWNED),
+        RepoSource("org/beta", Scope.MEMBER),
+        RepoSource("other/gamma", Scope.CONTRIBUTED),
+    ],
+    excluded=[],
+)
+
+
+@dataclass
+class SetupRun:
+    config_file: Path
+    data_dir: Path
+    discovered: list[Config]
+    registered: list[str] = field(default_factory=list)
+    refreshes: list[tuple[Path, str]] = field(default_factory=list)
+
+
+def setup_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config: str | None = None,
+    access: tuple[Check, TokenInfo | None] = (Check("GitHub", True, "octocat"), WORKING_TOKEN),
+    found: dict[str, Registration | None] | None = None,
+    refreshing_already: bool = False,
+) -> SetupRun:
+    data_dir = ingest_setup(tmp_path, monkeypatch, config)
+    run = SetupRun(tmp_path / "repolore.toml", data_dir.resolve(), online(monkeypatch, FOUND))
+    registrations = found or {"Claude Code": Registration(found=False), "Codex": None}
+
+    def register(client: McpClient) -> str:
+        run.registered.append(client.name)
+        return "for every project (user scope)"
+
+    def start_refresh(data_dir: Path, db: str) -> bool:
+        run.refreshes.append((data_dir, db))
+        return not refreshing_already
+
+    monkeypatch.setattr(cli, "github_access", lambda _: access)
+    monkeypatch.setattr(cli, "registration", lambda client: registrations[client.name])
+    monkeypatch.setattr(cli, "register", register)
+    monkeypatch.setattr(cli, "start_refresh", start_refresh)
+    return run
+
+
+ANSWERED = ["--register", "--refresh"]
+
+
+def test_setup_with_every_flag_asks_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+    root = tmp_path / "code"
+    root.mkdir()
+    flags = ["--include", "me/*", "--include", "org/beta", "--exclude", "me/old", "--local-root", str(root)]
+
+    result = runner.invoke(app, ["setup", *flags, *ANSWERED, "--db", "other"])
+
+    assert result.exit_code == 0, result.output
+    assert load_config(run.config_file) == Config(include=["me/*", "org/beta"], exclude=["me/old"], local_roots=[root])
+    assert run.discovered == []
+    assert run.registered == ["Claude Code"]
+    assert run.refreshes == [(run.data_dir, "other")]
+    assert "✓ GitHub: octocat" in result.output
+    assert "Claude Code: registered repolore for every project (user scope)." in result.output
+    assert "Codex: `codex` isn't on PATH, skipped." in result.output
+    assert f"Refreshing in the background; `repolore doctor` shows how far it got, and {run.data_dir}" in result.output
+
+
+def test_setup_refuses_a_local_root_flag_that_isnt_a_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", "--local-root", str(tmp_path / "nope"), *ANSWERED])
+
+    assert result.exit_code == 1
+    assert "not a folder" in result.output
+    assert not run.config_file.exists()
+
+
+def test_setup_writes_a_relative_local_root_flag_as_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+    (tmp_path / "code").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["setup", "--local-root", "code", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert load_config(run.config_file).local_roots == [tmp_path / "code"]
+
+
+def test_setup_stops_when_the_token_doesnt_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    access = (Check("GitHub", False, "the token didn't work", "log in again"), None)
+    run = setup_run(tmp_path, monkeypatch, access=access)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert "✗ GitHub: the token didn't work\n  fix: log in again" in result.output
+    assert not run.config_file.exists()
+    assert run.registered == []
+    assert run.refreshes == []
+
+
+def test_setup_goes_on_with_a_token_missing_a_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    access = (Check("GitHub", False, "octocat; missing read:org", "`gh auth refresh`"), WORKING_TOKEN)
+    run = setup_run(tmp_path, monkeypatch, access=access)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert "✗ GitHub: octocat; missing read:org" in result.output
+    assert run.config_file.exists()
+
+
+def test_setup_keeps_an_existing_config_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch, 'include = ["me/alpha"]\n')
+
+    result = runner.invoke(app, ["setup", "--include", "org/*", *ANSWERED], input="\n")
+
+    assert result.exit_code == 0
+    assert "Replace it? [y/N]" in result.output
+    assert "Keeping it; `repolore repos` shows what it selects." in result.output
+    assert run.config_file.read_text(encoding="utf-8") == 'include = ["me/alpha"]\n'
+    assert run.refreshes
+
+
+def test_setup_replaces_an_existing_config_when_told(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch, 'include = ["me/alpha"]\n')
+
+    result = runner.invoke(app, ["setup", "--include", "org/*", "--replace-config", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert run.config_file.read_text(encoding="utf-8") == 'include = ["org/*"]\n'
+    assert f'Wrote {run.config_file}:\ninclude = ["org/*"]' in result.output
+
+
+def test_setup_lists_the_repos_and_asks_again_until_the_pick_is_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", *ANSWERED], input="\n4\n1, other/*\n")
+
+    assert result.exit_code == 0, result.output
+    assert run.discovered == [Config()]
+    assert "   1  me/alpha     owned" in result.output
+    assert "   3  other/gamma  contributed" in result.output
+    assert "Error: 4 isn't a number or range between 1 and 3" in result.output
+    assert "Picked 2 of 3 repos." in result.output
+    assert load_config(run.config_file) == Config(include=["me/alpha", "other/*"])
+
+
+def test_setup_picks_every_repo_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", *ANSWERED], input="\n\n")
+
+    assert result.exit_code == 0
+    assert "Picked 3 of 3 repos." in result.output
+    assert f"Wrote an empty {run.config_file}: every repo found is in." in result.output
+    assert run.config_file.read_text(encoding="utf-8") == ""
+
+
+def test_setup_asks_again_for_a_local_root_that_isnt_a_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+    root = tmp_path / "code"
+    root.mkdir()
+
+    result = runner.invoke(app, ["setup", *ANSWERED], input=f"{tmp_path / 'nope'}\n{root}\n2\n")
+
+    assert result.exit_code == 0
+    assert "Error: not a folder" in result.output
+    assert run.discovered == [Config(local_roots=[root])]
+    assert load_config(run.config_file) == Config(include=["org/beta"], local_roots=[root])
+
+
+def test_setup_with_no_repos_found_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+    online(monkeypatch)
+
+    result = runner.invoke(app, ["setup", *ANSWERED], input="\n")
+
+    assert result.exit_code == 1
+    assert "Found no repos to index." in result.output
+    assert not run.config_file.exists()
+    assert run.refreshes == []
+
+
+def test_setup_leaves_registered_clients_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    found: dict[str, Registration | None] = {
+        "Claude Code": Registration(found=True, status="✓ Connected"),
+        "Codex": Registration(found=True, status="✗ Failed to connect"),
+    }
+    run = setup_run(tmp_path, monkeypatch, found=found)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert run.registered == []
+    assert "Claude Code: repolore is already registered (✓ Connected)." in result.output
+    assert (
+        "Codex: repolore is already registered (✗ Failed to connect); `repolore doctor` says how to fix it."
+        in result.output
+    )
+
+
+@pytest.mark.parametrize(
+    "error", [RegistrationError("already exists"), subprocess.TimeoutExpired("claude", 120), OSError("denied")]
+)
+def test_a_failed_registration_fails_setup_after_the_refresh_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def refuse(_: McpClient) -> str:
+        raise error
+
+    run = setup_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "register", refuse)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert f"Claude Code: couldn't register repolore: {error}" in result.output
+    assert run.refreshes
+
+
+def test_setup_without_registering_doesnt_check_the_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "registration", pytest.fail)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", "--no-register", "--refresh"])
+
+    assert result.exit_code == 0
+    assert "Checking the MCP clients" not in result.output
+    assert run.registered == []
+    assert run.refreshes
+
+
+def test_setup_asks_before_registering_and_refreshing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*"], input="n\nn\n")
+
+    assert result.exit_code == 0
+    assert "Register repolore with Claude Code? [Y/n]" in result.output
+    assert "Start a refresh now, in the background? [Y/n]" in result.output
+    assert "Run `repolore refresh` when you're ready" in result.output
+    assert run.registered == []
+    assert run.refreshes == []
+
+
+def test_setup_says_when_a_refresh_is_already_running(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    setup_run(tmp_path, monkeypatch, refreshing_already=True)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert "A refresh is already running; `repolore doctor` shows how far it got." in result.output
+
+
+def test_setup_fails_when_the_refresh_cant_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def cant_start(_: Path, __: str) -> bool:
+        raise OSError("can't start python")
+
+    setup_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "start_refresh", cant_start)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert "can't start python" in result.output

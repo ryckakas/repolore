@@ -43,6 +43,9 @@ uv run repolore refresh     # ingest, then build with the index's recorded setti
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore doctor      # check the setup, each part as a pass or a fail with its fix; exits 1 on a fail
+uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh;
+                            # each question has a flag (--include/--exclude/--local-root, --replace-config,
+                            # --register, --refresh)
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --distinct, --show-misses,
                             # --holdout
 uv run ruff format          # format
@@ -202,6 +205,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
   never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` asks
   each MCP client CLI on PATH (`claude`, `codex`) with `mcp get repolore`; Claude Code starts the server to check it.
+- `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
+  local roots, and writing `repolore.toml`. The command reuses doctor's GitHub check and stops only when the token
+  doesn't work. `clients.py` registers repolore: `claude mcp add --scope user`, and for Codex an entry appended to
+  `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp add` can't set the timeouts. A client that already has
+  repolore is left alone.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
 
 Nothing is async except the relay's forwarding and the shared server's watcher, which live on the SDK's event loop:
