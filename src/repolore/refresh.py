@@ -1,14 +1,14 @@
 import os
-import subprocess
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from filelock import FileLock, Timeout
 from pydantic import BaseModel, ValidationError
+
+from repolore.processes import spawn_detached
 
 LOCK_FILE = "refresh.lock"
 STATUS_FILE = "refresh.json"
@@ -78,27 +78,11 @@ def start_refresh(data_dir: Path, db: str) -> bool:
     command = [sys.executable, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", db]
     try:
         with (data_dir / LOG_FILE).open("w", encoding="utf-8") as log:
-            _spawn_detached(
-                command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=os.environ | QUIET
-            )
+            spawn_detached(command, stdout=log, env=os.environ | QUIET)
     except OSError:
         request.unlink()
         raise
     return True
-
-
-def _spawn_detached(command: list[str], **options: Any) -> None:
-    if sys.platform != "win32":
-        subprocess.Popen(command, start_new_session=True, **options)
-        return
-    # No console window for the child or for the `gh auth token` it runs, and no Ctrl+C from the server's group.
-    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-    try:
-        # Out of the client's job object, whose closing would otherwise kill the refresh along with the server.
-        subprocess.Popen(command, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **options)
-    except PermissionError:
-        # A job that forbids breaking away, as the Python MCP SDK's client makes, keeps the refresh in it.
-        subprocess.Popen(command, creationflags=flags, **options)
 
 
 def _is_running(data_dir: Path) -> bool:

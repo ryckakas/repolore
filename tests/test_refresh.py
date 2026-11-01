@@ -1,12 +1,14 @@
 import os
-import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import IO
 
 import pytest
 
+from repolore import refresh
+from repolore.processes import SpawnError
 from repolore.refresh import (
     LOCK_FILE,
     LOG_FILE,
@@ -97,104 +99,41 @@ def test_a_log_without_a_recorded_refresh_is_not_shown(tmp_path: Path) -> None:
     assert refresh_status(tmp_path).log_tail == []
 
 
-class FakePopen:
-    calls: list[tuple[list[str], dict[str, Any]]]
-
-    def __init__(self, command: list[str], **kwargs: Any) -> None:
-        FakePopen.calls.append((command, kwargs))
+Spawned = list[tuple[list[str], IO[str], Mapping[str, str]]]
 
 
 @pytest.fixture
-def spawned(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], dict[str, Any]]]:
-    FakePopen.calls = []
-    monkeypatch.setattr(subprocess, "Popen", FakePopen)
-    return FakePopen.calls
+def spawned(monkeypatch: pytest.MonkeyPatch) -> Spawned:
+    calls: Spawned = []
+
+    def spawn(command: list[str], *, stdout: IO[str], env: Mapping[str, str]) -> None:
+        calls.append((command, stdout, env))
+
+    monkeypatch.setattr(refresh, "spawn_detached", spawn)
+    return calls
 
 
-def test_a_refresh_is_started_as_a_quiet_detached_process(
-    tmp_path: Path, spawned: list[tuple[list[str], dict[str, Any]]]
-) -> None:
+def test_a_refresh_is_started_as_a_quiet_detached_process(tmp_path: Path, spawned: Spawned) -> None:
     data_dir = tmp_path / "data"
 
     assert start_refresh(data_dir, "experiment")
 
-    [(command, options)] = spawned
+    [(command, stdout, env)] = spawned
     assert command == [sys.executable, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", "experiment"]
-    assert options["stdin"] == subprocess.DEVNULL
-    assert options["stdout"].name == str(data_dir / LOG_FILE)
-    assert options["stderr"] == subprocess.STDOUT
-    assert options["env"]["TQDM_DISABLE"] == "1"
-    assert options["env"]["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
+    assert stdout.name == str(data_dir / LOG_FILE)
+    assert env["TQDM_DISABLE"] == "1"
+    assert env["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
     assert (data_dir / LOG_FILE).exists()
 
 
-def test_no_second_refresh_is_started_while_one_runs(
-    tmp_path: Path, spawned: list[tuple[list[str], dict[str, Any]]]
-) -> None:
+def test_no_second_refresh_is_started_while_one_runs(tmp_path: Path, spawned: Spawned) -> None:
     with refreshing(tmp_path):
         assert not start_refresh(tmp_path, "default")
 
     assert spawned == []
 
 
-WINDOWS_FLAGS = {
-    "CREATE_NO_WINDOW": 0x08000000,
-    "CREATE_NEW_PROCESS_GROUP": 0x200,
-    "CREATE_BREAKAWAY_FROM_JOB": 0x01000000,
-}
-
-
-@pytest.fixture
-def on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "platform", "win32")
-    for name, value in WINDOWS_FLAGS.items():
-        monkeypatch.setattr(subprocess, name, value, raising=False)
-
-
-@pytest.mark.usefixtures("on_windows")
-def test_on_windows_the_child_leaves_the_servers_job_and_console(
-    tmp_path: Path, spawned: list[tuple[list[str], dict[str, Any]]]
-) -> None:
-    start_refresh(tmp_path, "default")
-
-    [(_, options)] = spawned
-    assert options["creationflags"] == 0x08000000 | 0x200 | 0x01000000
-    assert "start_new_session" not in options
-
-
-@pytest.mark.usefixtures("on_windows")
-def test_a_job_that_forbids_breaking_away_keeps_the_child(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawned: list[tuple[list[str], dict[str, Any]]]
-) -> None:
-    def popen(command: list[str], **options: Any) -> None:
-        if options["creationflags"] & 0x01000000:
-            raise PermissionError(13, "Access is denied")
-        spawned.append((command, options))
-
-    monkeypatch.setattr(subprocess, "Popen", popen)
-
-    start_refresh(tmp_path, "default")
-
-    [(_, options)] = spawned
-    assert options["creationflags"] == 0x08000000 | 0x200
-
-
-@pytest.mark.parametrize("platform", ["linux", "darwin"])
-def test_elsewhere_the_child_gets_its_own_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawned: list[tuple[list[str], dict[str, Any]]], platform: str
-) -> None:
-    monkeypatch.setattr(sys, "platform", platform)
-
-    start_refresh(tmp_path, "default")
-
-    [(_, options)] = spawned
-    assert options["start_new_session"] is True
-    assert "creationflags" not in options
-
-
-def test_a_refresh_that_was_just_started_counts_as_running(
-    tmp_path: Path, spawned: list[tuple[list[str], dict[str, Any]]]
-) -> None:
+def test_a_refresh_that_was_just_started_counts_as_running(tmp_path: Path, spawned: Spawned) -> None:
     assert start_refresh(tmp_path, "default")
 
     assert refresh_status(tmp_path).running
@@ -202,9 +141,7 @@ def test_a_refresh_that_was_just_started_counts_as_running(
     assert len(spawned) == 1
 
 
-def test_the_started_process_takes_over_from_the_request(
-    tmp_path: Path, spawned: list[tuple[list[str], dict[str, Any]]]
-) -> None:
+def test_the_started_process_takes_over_from_the_request(tmp_path: Path, spawned: Spawned) -> None:
     start_refresh(tmp_path, "default")
 
     with refreshing(tmp_path):
@@ -222,12 +159,12 @@ def test_a_request_whose_process_never_started_expires(tmp_path: Path) -> None:
 
 
 def test_a_failed_spawn_withdraws_the_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def popen(*_: object, **__: object) -> None:
-        raise FileNotFoundError(2, "No such file")
+    def spawn(*_: object, **__: object) -> None:
+        raise SpawnError("Couldn't start python")
 
-    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(refresh, "spawn_detached", spawn)
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(SpawnError):
         start_refresh(tmp_path, "default")
 
     assert not refresh_status(tmp_path).running
