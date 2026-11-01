@@ -40,6 +40,7 @@ async def test_tools_are_listed_as_read_only(index_file: Path, fake_embedder: Fa
 
     assert set(tools) == {"search", "read", "list_repos", "refresh"}
     assert not any("\n" in (tool.description or "") for tool in tools.values())
+    assert "engineering history on GitHub" in (tools["search"].description or "")
     assert all(
         (annotations := tools[name].annotations) and annotations.read_only_hint
         for name in ("search", "read", "list_repos")

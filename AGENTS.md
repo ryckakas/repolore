@@ -169,9 +169,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   mostly importing transformers), so the first search finds it ready or waits on `LocalEmbedder`'s load lock.
   `search` cuts each passage at 1,500 characters; `read` returns a source's chunks in document order with their
   headers, about 12,000 characters per call (or one passage, when that is longer), so one long PR can't flood the
-  context.
-  `list_repos` also returns the index's `built_at` and the last refresh's status. Never print to stdout in code a
-  stdio server runs: stdout carries the protocol.
+  context. Not every client shows the server's instructions, so `search`'s description says what is searched and why
+  the first search can wait too. `list_repos` also returns the index's `built_at` and the last refresh's status.
+  Never print to stdout in code a stdio server runs: stdout carries the protocol.
 - `relay.py` is `repolore-mcp`, which every Claude Code session starts over stdio. It answers the MCP handshake
   itself and forwards `tools/list` and `tools/call` to one shared server per data dir and index, through an MCP client
   over Streamable HTTP, a new connection per call. It starts that server when none runs, replaces one of another
