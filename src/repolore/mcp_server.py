@@ -91,10 +91,11 @@ def create_server(paths: AppPaths, db_name: str, embedder_for: Callable[[str], E
         distinct: Annotated[
             bool,
             Field(
-                description="Return at most one passage per source URL, its best section, so k passages cover k "
-                "sources. A review thread has its own URL, so it counts apart from its PR."
+                description="true (default) returns at most one passage per source URL, its best section, so k "
+                "passages cover k sources; false also returns a source's other matching sections. A review thread "
+                "has its own URL, so it counts apart from its PR."
             ),
-        ] = False,
+        ] = True,
     ) -> SearchResults:
         """Find the passages that best match the query, best first, with permalinks."""
         with _open(index_file) as db:

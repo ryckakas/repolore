@@ -163,3 +163,36 @@ What would move the numbers next:
   repo or a dedicated "which repos" query.
 - **Not found.** The reranker's scores separate answerable from unanswerable questions; a cutoff on them is the
   most promising way to answer "nothing indexed covers this".
+
+## Distinct sources (2026-11-01)
+
+Hypothesis (#19): every section of a document is its own chunk, so a document that matches well fills several of
+the top k slots, and other sources fall out. Keeping only the best-ranked chunk of each source URL (`--distinct`,
+which fetches 50 candidates first) should cover more sources in the same k.
+
+On the default index (3,574 chunks, vector search, whole sections), plain search returned 3.29 distinct sources in
+the top 5 on average and 6.26 in the top 10; 26 of the 35 questions had a repeat in their top 5.
+
+| Tuning set (35) | recall@5 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| Vector | 0.857 | 0.911 | 0.814 | 0.805 |
+| Vector, one chunk per source | 0.904 | 0.935 | 0.818 | 0.822 |
+
+| Held-out set (5) | recall@5 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| Vector | 0.750 | 1.000 | 0.653 | 0.733 |
+| Vector, one chunk per source | 1.000 | 1.000 | 0.688 | 0.765 |
+
+Six tuning questions ranked an expected source higher and none ranked one lower. Four of the six expect several
+sources, and another of their sources moved up once the first one's other sections stopped taking slots (from rank
+7 to 4, 3 to 2, beyond 10 to 6, and beyond 10 to 10). The other two moved up a rank or two as other documents'
+repeats above them went. The gain in recall@5 (+0.047) is at the noise line, but it points the same way on every
+metric and on the held-out set.
+
+The eval only partly sees the cost. A question that needs a source's second-best section loses it, but only 1 of
+the 43 expected sources names a section, so the set barely tests that. A review thread has its own URL, so it
+still counts apart from its PR.
+
+Decision: the MCP `search` tool returns one chunk per source by default, and Claude Code can pass
+`distinct: false` for a document's other sections. The CLI keeps it as the `--distinct` option, so `search` and
+`eval` without it keep measuring plain ranking.

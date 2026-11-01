@@ -3,6 +3,7 @@ import json
 import logging
 import shutil
 import sys
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
@@ -12,7 +13,7 @@ from conftest import FakeEmbedder
 from typer.testing import CliRunner
 
 from repolore import __version__, cli
-from repolore.cli import app
+from repolore.cli import MISS_HITS, app
 from repolore.config import Config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import Document
@@ -21,7 +22,7 @@ from repolore.hub import ModelUnavailableError
 from repolore.paths import resolve_paths
 from repolore.refresh import refresh_status, refreshing
 from repolore.sources.github import GitHubClient, GitHubError
-from repolore.store import connect, index_settings
+from repolore.store import Hit, connect, index_settings
 
 runner = CliRunner()
 EXAMPLE_FILE = Path(__file__).parent.parent / "evals" / "questions.example.yaml"
@@ -679,6 +680,49 @@ def test_eval_records_the_index_settings(eval_questions: Path, cached_crashcause
     assert config["max_tokens"] == "8192"
     assert config["bot_reviews"] == "excluded"
     assert config["retrieval"] == "hybrid"
+
+
+class KeepOrderReranker:
+    def rerank(self, query: str, hits: Sequence[Hit]) -> list[Hit]:
+        return list(hits)
+
+
+@pytest.mark.parametrize(
+    ("options", "retrieval"),
+    [
+        ([], "vector"),
+        (["--distinct"], "vector+distinct"),
+        (["--mode", "keyword", "--rerank"], "keyword+rerank"),
+        (["--rerank", "--distinct"], "vector+rerank+distinct"),
+    ],
+)
+def test_eval_records_how_it_retrieved(
+    eval_questions: Path,
+    cached_crashcause: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: list[str],
+    retrieval: str,
+) -> None:
+    monkeypatch.setattr("repolore.cli.CrossEncoderReranker", KeepOrderReranker)
+
+    result = runner.invoke(app, ["eval", "--file", str(eval_questions), *options])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0].endswith(f"(fake-bag-of-words, {retrieval})")
+    [run_file] = (cached_crashcause / "evals" / "runs").glob("*.json")
+    assert json.loads(run_file.read_text(encoding="utf-8"))["config"]["retrieval"] == retrieval
+
+
+def test_eval_distinct_scores_one_chunk_per_source(eval_questions: Path, cached_crashcause: Path) -> None:
+    repeated = runner.invoke(app, ["eval", "--file", str(eval_questions), "--show-misses"])
+    distinct = runner.invoke(app, ["eval", "--file", str(eval_questions), "--show-misses", "--distinct"])
+
+    assert len(got_urls(repeated.output)) > len(set(got_urls(repeated.output)))
+    assert len(got_urls(distinct.output)) == len(set(got_urls(distinct.output))) == MISS_HITS
+
+
+def got_urls(output: str) -> list[str]:
+    return [line.split()[1] for line in output.splitlines() if line.startswith("  got ")]
 
 
 def test_refresh_ingests_then_rebuilds_with_the_recorded_settings(

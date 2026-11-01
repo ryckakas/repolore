@@ -107,6 +107,9 @@ with the sources expected to answer it. [EXPERIMENTS.md](EXPERIMENTS.md) has the
   `voyage-4-nano` (340M), the default.
 - **Less can be more.** Indexing every commit instead of only those without a PR lowered MRR: the commits restate
   their PR and push its passages down.
+- **One passage per source.** Plain search spent the top 5 on 3.3 sources on average, the rest being more sections
+  of the same document. Keeping each source's best section raised recall@5 from 0.857 to 0.904 and lowered no
+  question, so Claude Code's search does that by default (`--distinct` on the CLI).
 - **"Not found" is the open problem.** Cosine scores of answerable and unanswerable questions overlap. The
   reranker's scores separated them much better on the 3 unanswerable questions so far, which makes them the most
   promising way to say "nothing indexed covers this".
