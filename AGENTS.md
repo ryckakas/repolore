@@ -126,7 +126,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   are indexed as commits too.
 - `chunking.py` splits each document's markdown at headings (markdown-it-py, top-level blocks only, so
   a code fence or table stays one block), keeps each section whole up to a limit, and prefixes each chunk with a
-  header like `owner/repo · PR #17 · <title> · <section>`. The limit is `--max-tokens` or else an 8,192-token
+  header like `owner/repo · PR #17 · <title> · <section>`. A nested section's header names its parent headings
+  too, as in `owner/repo · CHANGELOG.md · Changelog > [0.3.0] - 2026-09-24 > Changed`, while its `section` stays
+  the leaf heading, which the eval matches. The limit is `--max-tokens` or else an 8,192-token
   ceiling, never more than the model reads, counted with the model's tokenizer on the embedded text, header
   included (a header over half the limit keeps half for the text, so those rare chunks pass it). A longer section
   is split between blocks, and a block over the limit by lines: fence pieces reopen and close the fence, table

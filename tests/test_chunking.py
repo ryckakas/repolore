@@ -286,6 +286,66 @@ def test_pull_request_chunks_carry_a_header_per_section() -> None:
     assert chunks[0].embedded_text == "octo/repo · PR #17 · Add the thing · Problem\n\n## Problem\n\nSlow."
 
 
+def changelog(body: str) -> Document:
+    return document(
+        kind=DocumentKind.DOC,
+        url="https://github.com/octo/repo/blob/main/CHANGELOG.md",
+        title="CHANGELOG.md",
+        body=body,
+    )
+
+
+def test_a_nested_section_names_its_parent_headings_in_its_header() -> None:
+    body = (
+        "# Changelog\n\n"
+        "## [0.3.0] - 2026-09-24\n\n### Changed\n\n- Traits.\n\n"
+        "## [0.2.0] - 2026-09-21\n\n### Changed\n\n- Go."
+    )
+
+    chunks = chunk_document(changelog(body))
+
+    assert [chunk.header for chunk in chunks] == [
+        "octo/repo · CHANGELOG.md · Changelog > [0.3.0] - 2026-09-24 > Changed",
+        "octo/repo · CHANGELOG.md · Changelog > [0.2.0] - 2026-09-21 > Changed",
+    ]
+    assert [chunk.section for chunk in chunks] == ["Changed", "Changed"]
+
+
+def test_a_header_names_only_the_headings_still_open_above_a_section() -> None:
+    body = "Intro.\n\n## A\n\na\n\n### A1\n\na1\n\n## B\n\nb\n\n#### B deep\n\nbd\n\n### B mid\n\nbm"
+
+    paths = [
+        chunk.header.removeprefix("octo/repo · CHANGELOG.md").removeprefix(" · ")
+        for chunk in chunk_document(changelog(body))
+    ]
+
+    assert paths == ["", "A", "A > A1", "B", "B > B deep", "B > B mid"]
+
+
+def test_setext_headings_and_empty_headings_nest_by_their_level() -> None:
+    body = "Title\n=====\n\n##\n\n### Child\n\nText.\n\nSub\n---\n\nMore."
+
+    assert [chunk.header for chunk in chunk_document(changelog(body))] == [
+        "octo/repo · CHANGELOG.md · Title > Child",
+        "octo/repo · CHANGELOG.md · Title > Sub",
+    ]
+
+
+def test_an_empty_heading_still_starts_a_section_of_its_own() -> None:
+    chunks = chunk_document(changelog("# Title\n\n##\n\nText."))
+
+    assert [(chunk.section, chunk.header) for chunk in chunks] == [("", "octo/repo · CHANGELOG.md · Title")]
+
+
+def test_parent_headings_count_toward_the_limit() -> None:
+    body = f"## {' '.join(['parent'] * 5)}\n\n### Child\n\n" + "\n\n".join(f"para {n} of four" for n in range(5))
+
+    chunks = chunk_document(changelog(body), 30, words)
+
+    assert len(chunks) > 1
+    assert all(count <= 30 for count in words([chunk.embedded_text for chunk in chunks]))
+
+
 @pytest.mark.parametrize(
     ("kind", "url", "title", "header"),
     [

@@ -41,6 +41,17 @@ class Section:
 class _Block:
     text: str
     heading: str | None
+    level: int = 0
+
+
+@dataclass(frozen=True)
+class _Section:
+    path: tuple[str, ...]
+    blocks: list[str]
+
+    @property
+    def heading(self) -> str | None:
+        return self.path[-1] if self.path else None
 
 
 TokenCounter = Callable[[Sequence[str]], list[int]]
@@ -65,33 +76,29 @@ def chunk_document(
     """One chunk per section; with max_tokens, no chunk's embedded text (header included) is longer than that,
     unless the header alone takes over half of it."""
     sections = _sections(document.body)
-    headers = [_header(document, heading) for heading, _ in sections]
+    headers = [_header(document, section.path) for section in sections]
     # Most sections fit whole, and one count per document is far cheaper than counting their blocks one by one.
-    texts = [f"{header}\n\n" + "\n\n".join(blocks) for header, (_, blocks) in zip(headers, sections, strict=True)]
+    texts = [f"{header}\n\n" + "\n\n".join(section.blocks) for header, section in zip(headers, sections, strict=True)]
     whole = [0] * len(texts) if max_tokens is None else count(texts)
-    pieces: list[tuple[str | None, int, str]] = []
-    for (heading, blocks), header, tokens in zip(sections, headers, whole, strict=True):
+    pieces: list[tuple[str | None, str, int, str]] = []
+    for section, header, tokens in zip(sections, headers, whole, strict=True):
         budget = None if max_tokens is None or tokens <= max_tokens else _text_budget(max_tokens, header, count)
-        pieces += [(heading, part, text) for part, text in enumerate(_pack(heading, blocks, budget, count))]
+        packed = _pack(section.heading, section.blocks, budget, count)
+        pieces += [(section.heading, header, part, text) for part, text in enumerate(packed)]
     return [
-        Chunk(
-            id=f"{document.url}::{ordinal}",
-            document=document,
-            section=heading,
-            header=_header(document, heading),
-            text=text,
-            part=part,
+        Chunk(id=f"{document.url}::{ordinal}", document=document, section=heading, header=header, text=text, part=part)
+        for ordinal, (heading, header, part, text) in enumerate(
+            pieces or [(None, _header(document), 0, document.title)]
         )
-        for ordinal, (heading, part, text) in enumerate(pieces or [(None, 0, document.title)])
     ]
 
 
 def split_markdown(text: str, max_tokens: int | None = None, count: TokenCounter = estimate_counts) -> list[Section]:
     """One section per heading; with max_tokens, a longer section is split between, and if need be inside, blocks."""
     return [
-        Section(heading, piece)
-        for heading, blocks in _sections(text)
-        for piece in _pack(heading, blocks, max_tokens, count)
+        Section(section.heading, piece)
+        for section in _sections(text)
+        for piece in _pack(section.heading, section.blocks, max_tokens, count)
     ]
 
 
@@ -99,17 +106,19 @@ def count_split_sections(chunks: Sequence[Chunk]) -> int:
     return sum(1 for chunk in chunks if chunk.part == 1)
 
 
-def _sections(text: str) -> list[tuple[str | None, list[str]]]:
-    sections: list[tuple[str | None, list[str]]] = []
-    heading: str | None = None
+def _sections(text: str) -> list[_Section]:
+    sections: list[_Section] = []
+    path: tuple[str, ...] = ()
+    levels: tuple[int, ...] = ()
     blocks: list[str] = []
     for block in _blocks(_fence_front_matter(text.replace("\r\n", "\n"))):
-        if block.heading is not None:
-            sections.append((heading, blocks))
-            heading, blocks = block.heading, [block.text]
-        else:
+        if block.heading is None:
             blocks.append(block.text)
-    return [*sections, (heading, blocks)]
+            continue
+        sections.append(_Section(path, blocks))
+        kept = sum(1 for level in levels if level < block.level)
+        path, levels, blocks = (*path[:kept], block.heading), (*levels[:kept], block.level), [block.text]
+    return [*sections, _Section(path, blocks)]
 
 
 def _fence_front_matter(text: str) -> str:
@@ -123,8 +132,11 @@ def _blocks(text: str) -> Iterator[_Block]:
         if token.level != 0 or token.map is None or token.nesting < 0:
             continue
         start, end = token.map
-        heading = tokens[index + 1].content.strip() if token.type == "heading_open" else None
-        yield _Block(text="\n".join(lines[start:end]).strip(), heading=heading)
+        text = "\n".join(lines[start:end]).strip()
+        if token.type == "heading_open":
+            yield _Block(text, heading=tokens[index + 1].content.strip(), level=int(token.tag[1:]))
+        else:
+            yield _Block(text, heading=None)
 
 
 def _text_budget(max_tokens: int, header: str, count: TokenCounter) -> int:
@@ -212,8 +224,8 @@ def _joined(
     return pieces
 
 
-def _header(document: Document, section: str | None) -> str:
-    parts = [document.repo, _reference(document), document.title, section]
+def _header(document: Document, path: tuple[str, ...] = ()) -> str:
+    parts = [document.repo, _reference(document), document.title, " > ".join(heading for heading in path if heading)]
     return " · ".join(part for part in parts if part)
 
 
