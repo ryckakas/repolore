@@ -171,6 +171,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `filelock`, so a killed run leaves no stale lock) and records its start, end and outcome in `refresh.json`. The MCP
   `refresh` tool doesn't refresh in the server: it starts `python -m repolore refresh` as a detached process that
   writes to `refresh.log` and outlives the session, so the server loads no second model and blocks no worker thread.
+- `processes.py` starts those detached processes. On Windows, Claude Code stops a session's server with
+  `taskkill /T /F`, which kills every process still linked to it by parent PID, whatever the creation flags, so a
+  short-lived intermediate starts the real process and exits before `spawn_detached` returns.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
 
 Nothing is async: the MCP SDK runs the plain `def` tools on worker threads, and the rest of the pipeline is
