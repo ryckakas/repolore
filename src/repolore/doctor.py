@@ -74,25 +74,30 @@ def vectors_check() -> Check:
 
 
 def github_check(connect: Callable[[str], GitHubClient]) -> Check:
+    return github_access(connect)[0]
+
+
+def github_access(connect: Callable[[str], GitHubClient]) -> tuple[Check, TokenInfo | None]:
+    """The GitHub check, with what the token is when it works, even if it lacks scopes."""
     source = token_source()
     try:
         token = resolve_token()
     except GitHubError as error:
-        return Check("GitHub", False, str(error))
+        return Check("GitHub", False, str(error)), None
     login_fix = f"set a new {TOKEN_ENV}" if source == TOKEN_ENV else "log in again with `gh auth login`"
     try:
         with closing(connect(token)) as client:
             info = client.token_info()
     except RateLimited as error:
-        return Check("GitHub", False, str(error), "wait for the reset; a running refresh may be using the points")
+        return Check("GitHub", False, str(error), "wait for the reset; a running refresh may be using the points"), None
     except GitHubError as error:
-        return Check("GitHub", False, f"the token from {source} didn't work: {error}", login_fix)
+        return Check("GitHub", False, f"the token from {source} didn't work: {error}", login_fix), None
     except httpx.TransportError as error:
-        return Check("GitHub", False, f"can't reach GitHub: {error}", "check the network, or HTTPS_PROXY")
+        return Check("GitHub", False, f"can't reach GitHub: {error}", "check the network, or HTTPS_PROXY"), None
     detail = f"{info.login}, token from {source}, {_scopes(info)}{_points(info)}"
     if missing := info.missing_scopes:
-        return Check("GitHub", False, f"{detail}; missing {', '.join(missing)}", _scope_fix(source, missing))
-    return Check("GitHub", True, detail)
+        return Check("GitHub", False, f"{detail}; missing {', '.join(missing)}", _scope_fix(source, missing)), info
+    return Check("GitHub", True, detail), info
 
 
 def _scopes(info: TokenInfo) -> str:

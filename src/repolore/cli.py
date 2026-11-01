@@ -2,10 +2,11 @@ import hashlib
 import io
 import logging
 import random
+import subprocess
 import sys
 import tomllib
 from collections import Counter
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -16,9 +17,10 @@ from pydantic import ValidationError
 
 from repolore import __version__
 from repolore.chunking import Chunk, chunk_document, chunk_limit, count_split_sections
+from repolore.clients import CLIENTS, McpClient, RegistrationError, register, registration
 from repolore.config import Config, load_config
 from repolore.discovery import discover
-from repolore.doctor import diagnose
+from repolore.doctor import diagnose, github_access
 from repolore.documents import Document, DocumentKind
 from repolore.embedding.local import MODELS, LocalEmbedder, ModelName, UnknownModelError, embedder_for
 from repolore.evals.harness import (
@@ -38,11 +40,12 @@ from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report, ignore
-from repolore.refresh import RefreshRunning, refreshing
+from repolore.refresh import LOG_FILE, RefreshRunning, refreshing, start_refresh
 from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
 from repolore.server_state import ServerFiles, connected_relays, is_running, read_discovery
+from repolore.setup import ALL, SelectionError, checked_roots, parse_roots, parse_selection, write_config
 from repolore.sources.github import GitHubClient, GitHubError, resolve_token
 from repolore.store import (
     EmbeddingCache,
@@ -344,6 +347,139 @@ def doctor(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
         failed |= not check.ok
     if failed:
         raise typer.Exit(1)
+
+
+@app.command()
+def setup(
+    ctx: typer.Context,
+    include: Annotated[
+        list[str] | None,
+        typer.Option(help="Index the repos matching this owner/name glob, repeated for more, instead of picking them."),
+    ] = None,
+    exclude: Annotated[list[str] | None, typer.Option(help="Leave out the repos matching this glob.")] = None,
+    local_root: Annotated[
+        list[Path] | None, typer.Option(help="A folder of checkouts whose .plans/ documents to index.")
+    ] = None,
+    replace_config: Annotated[
+        bool | None, typer.Option("--replace-config/--keep-config", help="Replace an existing repolore.toml or not.")
+    ] = None,
+    register_clients: Annotated[
+        bool | None, typer.Option("--register/--no-register", help="Register repolore with Claude Code and Codex.")
+    ] = None,
+    first_refresh: Annotated[
+        bool | None, typer.Option("--refresh/--no-refresh", help="Start a refresh in the background.")
+    ] = None,
+    db: IndexOption = DEFAULT_INDEX,
+) -> None:
+    """Set repolore up: check GitHub access, pick the repos for repolore.toml, register the MCP server with the clients
+    on PATH and start the first refresh.
+
+    Each question has a flag that answers it; --include, --exclude and --local-root together answer the repo picking.
+    """
+    paths: AppPaths = ctx.obj
+    _print_version(paths)
+    check, access = github_access(GitHubClient.connect)
+    typer.echo(str(check))
+    if access is None:
+        raise typer.Exit(1)
+    with _exit_on(SelectionError):
+        roots = checked_roots(local_root or [])
+    chosen = Config(include=include or [], exclude=exclude or [], local_roots=roots)
+    _setup_config(paths.config_file, None if chosen == Config() else chosen, replace_config)
+    registered = _setup_clients(register_clients)
+    _setup_refresh(paths.data_dir, db, first_refresh)
+    if not registered:
+        raise typer.Exit(1)
+
+
+def _setup_config(config_file: Path, chosen: Config | None, replace: bool | None) -> None:
+    if config_file.exists():
+        typer.echo(f"{config_file} exists.")
+        if not _asked(replace, "Replace it?", default=False):
+            typer.echo("Keeping it; `repolore repos` shows what it selects.")
+            return
+    text = write_config(config_file, chosen or _pick_repos())
+    typer.echo(f"Wrote {config_file}:\n{text}" if text else f"Wrote an empty {config_file}: every repo found is in.")
+
+
+def _pick_repos() -> Config:
+    roots = typer.prompt(
+        "Folders that hold your checkouts, to index their .plans/ (comma-separated, empty for none)",
+        default="",
+        show_default=False,
+        value_proc=_reasked(parse_roots),
+    )
+    typer.echo("Finding your repos, which takes a few dozen GitHub requests.")
+    with _github() as client:
+        found = discover(client, Config(local_roots=roots)).included
+    if not found:
+        _fail("Found no repos to index.")
+    width = max(len(source.name) for source in found)
+    for number, source in enumerate(found, start=1):
+        typer.echo(f"{number:>4}  {source.name:<{width}}  {source.scope}")
+    names = [source.name for source in found]
+    typer.echo("The first refresh embeds every picked repo on this machine, which takes a while; start with a few.")
+    include: list[str] = typer.prompt(
+        "Repos to index: numbers (1,4-6), owner/name globs (your-org/*) or all",
+        default=ALL,
+        value_proc=_reasked(lambda answer: parse_selection(answer, names)),
+    )
+    config = Config(include=include, local_roots=roots)
+    typer.echo(f"Picked {sum(config.selects(name) for name in names)} of {len(names)} repos.")
+    return config
+
+
+def _reasked[T](parse: Callable[[str], T]) -> Callable[[str], T]:
+    def parse_or_ask_again(answer: str) -> T:
+        try:
+            return parse(answer)
+        except SelectionError as error:
+            raise typer.BadParameter(str(error)) from error
+
+    return parse_or_ask_again
+
+
+def _asked(flag: bool | None, question: str, default: bool) -> bool:
+    return typer.confirm(question, default=default) if flag is None else flag
+
+
+def _setup_clients(answer: bool | None) -> bool:
+    if answer is False:
+        return True
+    typer.echo("Checking the MCP clients; Claude Code starts repolore to check it, which takes a few seconds.")
+    registered = True
+    for client in CLIENTS:
+        try:
+            _setup_client(client, answer)
+        except (OSError, subprocess.SubprocessError, RegistrationError) as error:
+            typer.echo(f"{client.name}: couldn't register repolore: {error}", err=True)
+            registered = False
+    return registered
+
+
+def _setup_client(client: McpClient, answer: bool | None) -> None:
+    found = registration(client)
+    if found is None:
+        typer.echo(f"{client.name}: `{client.command}` isn't on PATH, skipped.")
+    elif found.found:
+        status = f" ({found.status})" if found.status else ""
+        hint = "" if found.healthy else "; `repolore doctor` says how to fix it"
+        typer.echo(f"{client.name}: repolore is already registered{status}{hint}.")
+    elif _asked(answer, f"Register repolore with {client.name}?", default=True):
+        typer.echo(f"{client.name}: registered repolore {register(client)}.")
+
+
+def _setup_refresh(data_dir: Path, db: str, answer: bool | None) -> None:
+    if not _asked(answer, "Start a refresh now, in the background?", default=True):
+        typer.echo("Run `repolore refresh` when you're ready; it fetches and indexes the picked repos.")
+        return
+    with _exit_on(OSError):
+        started = start_refresh(data_dir, db)
+    progress = "`repolore doctor` shows how far it got"
+    if started:
+        typer.echo(f"Refreshing in the background; {progress}, and {data_dir / LOG_FILE} has its log.")
+    else:
+        typer.echo(f"A refresh is already running; {progress}.")
 
 
 @app.command()

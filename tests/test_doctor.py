@@ -16,6 +16,7 @@ from repolore.doctor import (
     Check,
     config_check,
     diagnose,
+    github_access,
     github_check,
     index_check,
     model_check,
@@ -107,6 +108,24 @@ def test_a_token_variable_without_scopes_needs_a_new_classic_token() -> None:
     assert not check.ok
     assert check.detail.endswith("no scopes; missing repo, read:org")
     assert check.fix == "set REPOLORE_GITHUB_TOKEN to a classic token with the repo and read:org scopes"
+
+
+@pytest.mark.usefixtures("env_token")
+def test_a_token_missing_a_scope_still_says_whose_it_is() -> None:
+    check, token = github_access(github_answering(headers={"x-oauth-scopes": "repo"}))
+
+    assert not check.ok
+    assert token is not None
+    assert token.login == "octocat"
+    assert token.missing_scopes == ["read:org"]
+
+
+@pytest.mark.usefixtures("env_token")
+def test_a_token_that_doesnt_work_has_no_access() -> None:
+    check, token = github_access(github_answering(status=401))
+
+    assert not check.ok
+    assert token is None
 
 
 @pytest.mark.usefixtures("env_token")

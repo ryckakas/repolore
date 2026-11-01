@@ -26,54 +26,39 @@ and macOS 14+ on Apple Silicon.
    there's nothing to do. Otherwise set `REPOLORE_GITHUB_TOKEN` to a classic token with the `repo` scope, plus
    `read:org` for organization repos. Organizations with SSO also need the token authorized for them.
 
-3. See which repos it found, and narrow them down for a first run:
+3. Set it up:
 
    ```sh
-   repolore repos
+   repolore setup
    ```
 
+   It checks the GitHub token, lists the repos it found and asks which to index, writes your pick to `repolore.toml`,
+   registers repolore with Claude Code and Codex when they're on PATH, and starts the first refresh in the background.
    It finds the repos you own or can read as a collaborator or organization member, plus your own PRs and issues in
-   other people's repos. The first build embeds everything locally, which takes a while for a large account, so
-   start with a few repos. Create `repolore.toml` at the config path that `repolore version` prints, then run
-   `repolore repos` again to check the selection:
+   other people's repos. The first refresh embeds everything on your machine, which takes a while for a large
+   account, so start with a few repos.
 
-   ```toml
-   include = ["you/some-repo", "your-org/*"]   # globs over owner/name; every repo when unset
-   exclude = ["your-org/old-*"]                # never these
-   local_roots = ["~/projects"]                # checkouts in here add their local .plans/ documents
-   ```
+   The first refresh also downloads the embedding model, about 700 MB. As a rough guide, a small repo of 149 chunks
+   took 4.5 minutes on a 12-core desktop CPU, download included. On Apple Silicon, it embeds on the GPU, roughly twice
+   as fast; set `REPOLORE_DEVICE=cpu` to keep it on the CPU. `repolore doctor` shows how far it has got.
 
-4. Fetch and index:
+   Every question has a flag, which `repolore setup --help` lists, so it can run without asking:
+   `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when `repolore.toml` exists).
 
-   ```sh
-   repolore ingest   # fetch from GitHub; later runs fetch only what changed
-   repolore build    # embed and index; later runs embed only what changed
-   ```
-
-   The first build downloads the embedding model, about 700 MB. As a rough guide, a small repo of 149 chunks took
-   4.5 minutes on a 12-core desktop CPU, download included. On Apple Silicon, `build` embeds on the GPU, roughly
-   twice as fast; set `REPOLORE_DEVICE=cpu` to keep it on the CPU.
-
-5. Search:
+4. Search:
 
    ```sh
    repolore search "why did we drop the retry middleware?"
    repolore search "rate limit handling" --repo you/some-repo --kind pr -k 10
    ```
 
-6. Search from Claude Code by registering the MCP server once:
-
-   ```sh
-   claude mcp add --scope user --transport stdio repolore -- repolore-mcp
-   ```
-
-   Claude Code then gets `search`, `read`, `list_repos` and `refresh` tools and can answer questions about your history
-   with links to the sources. `search` cuts each passage at 1,500 characters, and `read` returns a source's whole text
-   from the index, plans and private repos included, a page at a time. All sessions share one server that holds the
-   model: each session's `repolore-mcp` is a small relay (about 70 MB) that starts the shared server when none is
-   running and passes the tools through. The server loads the model in the background when it starts, which takes
-   about half a minute, so only a search in that time waits for it, and it exits 10 minutes after the last session
-   closes. It listens on 127.0.0.1 only and needs a token that changes every time it starts.
+   Or ask Claude Code in a new session. It gets `search`, `read`, `list_repos` and `refresh` tools and can answer
+   questions about your history with links to the sources. `search` cuts each passage at 1,500 characters, and `read`
+   returns a source's whole text from the index, plans and private repos included, a page at a time. All sessions
+   share one server that holds the model: each session's `repolore-mcp` is a small relay (about 70 MB) that starts the
+   shared server when none is running and passes the tools through. The server loads the model in the background when
+   it starts, which takes about half a minute, so only a search in that time waits for it, and it exits 10 minutes
+   after the last session closes. It listens on 127.0.0.1 only and needs a token that changes every time it starts.
    `repolore server status` shows it and `repolore server stop` stops it.
    `repolore-mcp --standalone` serves from the session's own process, with its own copy of the model, as before.
 
@@ -108,6 +93,40 @@ fails: GitHub access and the token's scopes, `repolore.toml`, the index, the emb
 shared server and the MCP clients that have repolore registered. It makes one GitHub request, and when Claude Code is
 installed it asks `claude mcp get repolore`, which starts repolore to check that it connects.
 
+### Setting up by hand
+
+`repolore setup` runs these steps, which you can also run yourself:
+
+1. See which repos it found:
+
+   ```sh
+   repolore repos
+   ```
+
+   Create `repolore.toml` at the config path that `repolore version` prints, then run `repolore repos` again to check
+   the selection:
+
+   ```toml
+   include = ["you/some-repo", "your-org/*"]   # globs over owner/name; every repo when unset
+   exclude = ["your-org/old-*"]                # never these
+   local_roots = ["~/projects"]                # checkouts in here add their local .plans/ documents
+   ```
+
+2. Fetch and index:
+
+   ```sh
+   repolore ingest   # fetch from GitHub; later runs fetch only what changed
+   repolore build    # embed and index; later runs embed only what changed
+   ```
+
+3. Register the MCP server with Claude Code once:
+
+   ```sh
+   claude mcp add --scope user --transport stdio repolore -- repolore-mcp
+   ```
+
+   For Codex and other clients, see [Other MCP clients](#other-mcp-clients).
+
 ### Other MCP clients
 
 `repolore-mcp` is a standard stdio MCP server, so other clients can run it too. Most take a JSON entry in the
@@ -117,7 +136,8 @@ portable `mcpServers` format (VS Code's own `mcp.json` calls the object `servers
 { "mcpServers": { "repolore": { "command": "repolore-mcp" } } }
 ```
 
-For Codex, add it to `~/.codex/config.toml` with longer timeouts:
+For Codex, add it to `~/.codex/config.toml` with longer timeouts. `repolore setup` adds this entry when `codex` is on
+PATH, with an `env_vars` line for the variables below that are set when it runs:
 
 ```toml
 [mcp_servers.repolore]
