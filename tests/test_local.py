@@ -82,6 +82,17 @@ def test_model_is_loaded_once_pinned_and_in_float32() -> None:
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")
+def test_warm_up_loads_the_model_a_search_then_reuses() -> None:
+    embedder = LocalEmbedder()
+
+    embedder.warm_up()
+    assert len(StubModel.loads) == 1
+    embedder.embed_query("a")
+
+    assert len(StubModel.loads) == 1
+
+
+@pytest.mark.usefixtures("stub_sentence_transformers")
 @pytest.mark.parametrize(
     ("use_gpu", "mps", "override", "device"),
     [

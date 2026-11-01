@@ -1,4 +1,6 @@
+import logging
 import sqlite3
+import threading
 from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -21,6 +23,8 @@ from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
 from repolore.store import Filters, Hit, StoreError, connect_read_only, index_model, index_settings, repo_counts
 
+log = logging.getLogger(__name__)
+
 TEXT_CHARS = 1500
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 REFRESHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
@@ -28,9 +32,9 @@ INSTRUCTIONS = (
     "Searches the user's own engineering history on GitHub: pull request descriptions and discussions, review "
     "threads, issues, commits without a PR, and repository markdown (README, AGENTS.md, docs). Use it when the user "
     "asks why or how something was decided, built, fixed or rejected in their repos, or which repo already did "
-    "something. Results are passages with GitHub permalinks; cite the permalinks. The first search in a session "
-    "loads the embedding model and can take about a minute. list_repos says when the index was built; when it looks "
-    "out of date for the question, the refresh tool updates it in the background."
+    "something. Results are passages with GitHub permalinks; cite the permalinks. A search can wait a minute or "
+    "more while the server is still loading the embedding model. list_repos says when the index was built; when it "
+    "looks out of date for the question, the refresh tool updates it in the background."
 )
 
 
@@ -133,6 +137,24 @@ def create_server(paths: AppPaths, db_name: str, embedder_for: Callable[[str], E
     return server
 
 
+def preload(index_file: Path, embedder_for: Callable[[str], Embedder]) -> threading.Thread | None:
+    """Load the index's model in the background, so the first search doesn't wait for it."""
+    if not index_file.exists():
+        return None
+    thread = threading.Thread(target=_warm_up, args=(index_file, embedder_for), name="preload", daemon=True)
+    thread.start()
+    return thread
+
+
+def _warm_up(index_file: Path, embedder_for: Callable[[str], Embedder]) -> None:
+    try:
+        with closing(connect_read_only(index_file)) as db:
+            model_id = index_model(db)[0]
+        embedder_for(model_id).warm_up()
+    except (StoreError, UnknownModelError, ModelUnavailableError) as error:
+        log.warning("Not preloading the model, the first search will report why: %s", error)
+
+
 @contextmanager
 def _open(index_file: Path) -> Generator[sqlite3.Connection]:
     if not index_file.exists():
@@ -167,9 +189,16 @@ def _result(hit: Hit) -> Result:
 def serve(
     data_dir: Annotated[Path | None, typer.Option(help="Override the data directory.")] = None,
     db: Annotated[str, typer.Option(help="Name of the index to serve.")] = "default",
+    preload_model: Annotated[
+        bool, typer.Option("--preload/--no-preload", help="Load the embedding model at start, not on the first search.")
+    ] = True,
 ) -> None:
     """Serve search over the repolore index to an MCP client on stdin and stdout."""
-    create_server(resolve_paths(data_dir), db, embedder_for).run()
+    paths = resolve_paths(data_dir)
+    server = create_server(paths, db, embedder_for)
+    if preload_model:
+        preload(paths.index_file(db), embedder_for)
+    server.run()
 
 
 def main() -> None:

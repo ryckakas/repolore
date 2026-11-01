@@ -67,8 +67,10 @@ and macOS 14+ on Apple Silicon.
    claude mcp add --scope user --transport stdio repolore -- repolore-mcp
    ```
 
-   Claude Code then gets `search` and `list_repos` tools and can answer questions about your history with links to
-   the sources. The first search in a session loads the model, which takes a little while.
+   Claude Code then gets `search`, `list_repos` and `refresh` tools and can answer questions about your history with
+   links to the sources. Each session's server loads the model in the background when it starts, which takes about
+   half a minute, so only a search in that time waits for it. `repolore-mcp --no-preload` loads it on the first
+   search instead, which saves the memory in sessions that never search.
 
 To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was
 built with, and only one refresh runs at a time. Search keeps working meanwhile. Claude Code can do the same: the MCP

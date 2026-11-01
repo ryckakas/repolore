@@ -23,6 +23,10 @@ class FakeEmbedder:
     def __init__(self) -> None:
         self.embedded: list[str] = []
         self.batches: list[list[str]] = []
+        self.warm_ups = 0
+
+    def warm_up(self) -> None:
+        self.warm_ups += 1
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
         self.embedded += texts
