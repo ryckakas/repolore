@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 rerank = [
-    "huggingface-hub>=1.33.0",
+    "huggingface-hub>=2.4.0",
     "sentence-transformers>=6.2.0,<6.3",
     "torch>=2.15.0",
 ]
