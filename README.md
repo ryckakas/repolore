@@ -1,101 +1,87 @@
 # repolore
 
+![repolore: RAG over your own engineering history on GitHub, with a CLI and an MCP server](https://raw.githubusercontent.com/ryckakas/repolore/main/docs/images/cover-hero.jpg)
+
+**Ask why your code is the way it is, and get back the PR, review thread or issue that says so.**
+
+*Lore: what a team knows about its own code. Most of it was written down once, in a PR or a review thread, and
+then buried.*
+
 RAG over your own engineering history on GitHub: PRs, review threads, issues, commits and docs, searchable from a
 CLI and from Claude Code over MCP. It answers questions like "why did we drop the retry middleware?" with the
 passages that explain it and links to them.
 
-Everything runs on your machine with your own GitHub token. Embeddings are computed locally, so no model API key is
-needed, and nothing leaves your machine except GitHub API calls and the one-time model download from GitHub.
+[![CI](https://github.com/ryckakas/repolore/actions/workflows/ci.yml/badge.svg)](https://github.com/ryckakas/repolore/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/repolore-mcp?color=3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/repolore-mcp/)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-## Quickstart
+## Why this one
+
+- **The history, not just the code.** PR descriptions, review threads, issues, commits that never had a PR, the
+  repos' markdown, and the `.plans/` folders in your local checkouts. The reasons behind code live there.
+- **Everything stays on your machine.** It uses your own GitHub token and embeds locally, so no model API key is
+  needed, and nothing leaves your machine except GitHub API calls and the one-time model download from GitHub.
+- **Made for Claude Code.** Sessions get `search`, `read`, `list_repos` and `refresh` tools and answer with links
+  to the sources. Codex and other MCP clients work too.
+- **One model for every session.** Each session runs a small relay, about 70 MB; one shared server holds the model.
+- **Stays current cheaply.** A refresh fetches only what changed on GitHub and embeds only the chunks that changed.
+- **Every default was measured.** Each retrieval choice went through `repolore eval` against a fixed question set,
+  and [EXPERIMENTS.md](https://github.com/ryckakas/repolore/blob/main/EXPERIMENTS.md) logs every result.
+- **Hand-built.** No RAG or eval framework: fetching, chunking, embedding, retrieval and evaluation are each written
+  out, so every stage stays visible.
+
+## Install
 
 You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a GitHub login. It runs on Linux, Windows
 and macOS 14+ on Apple Silicon.
 
-1. Install the `repolore` and `repolore-mcp` commands:
-
-   ```sh
-   uv tool install --managed-python --python 3.12 git+https://github.com/ryckakas/repolore
-   ```
-
-   `--managed-python` makes uv use its own Python build, which can load the SQLite extension the index needs; some
-   system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, run
-   `uv tool update-shell` and open a new terminal. The install takes about 160 MB. Reranking (`--rerank`, off by
-   default) needs PyTorch on top, about 900 MB more, and says how to add it when you ask for it.
-
-2. Give it GitHub access. If you're logged in with the [GitHub CLI](https://cli.github.com/) (`gh auth login`),
-   there's nothing to do. Otherwise set `REPOLORE_GITHUB_TOKEN` to a classic token with the `repo` scope, plus
-   `read:org` for organization repos. Organizations with SSO also need the token authorized for them.
-
-3. Set it up:
-
-   ```sh
-   repolore setup
-   ```
-
-   It checks the GitHub token, lists the repos it found and asks which to index, writes your pick to `repolore.toml`,
-   registers repolore with Claude Code and Codex when they're on PATH, and starts the first refresh in the background.
-   It finds the repos you own or can read as a collaborator or organization member, plus your own PRs and issues in
-   other people's repos. The first refresh embeds everything on your machine, which takes a while for a large
-   account, so start with a few repos.
-
-   The first refresh also downloads the embedding model from GitHub, about 1.4 GB. As a rough guide, 3,713 chunks took
-   22 minutes to embed on a 12-core desktop CPU, after a 9-minute download. On Apple Silicon it embeds on the GPU
-   through MLX; set `REPOLORE_DEVICE=cpu` to keep it on the CPU. `repolore doctor` shows how far it has got and
-   which engine a build uses.
-
-   Every question has a flag, which `repolore setup --help` lists, so it can run without asking:
-   `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when `repolore.toml` exists).
-
-4. Search:
-
-   ```sh
-   repolore search "why did we drop the retry middleware?"
-   repolore search "rate limit handling" --repo you/some-repo --kind pr -k 10
-   ```
-
-   Or ask Claude Code in a new session. It gets `search`, `read`, `list_repos` and `refresh` tools and can answer
-   questions about your history with links to the sources. `search` cuts each passage at 1,500 characters, and `read`
-   returns a source's whole text from the index, plans and private repos included, a page at a time. All sessions
-   share one server that holds the model: each session's `repolore-mcp` is a small relay (about 70 MB) that starts the
-   shared server when none is running and passes the tools through. The server loads the model in the background when
-   it starts, which takes about half a minute, so only a search in that time waits for it, and it exits 10 minutes
-   after the last session closes. It listens on 127.0.0.1 only and needs a token that changes every time it starts.
-   `repolore server status` shows it and `repolore server stop` stops it.
-   `repolore-mcp --standalone` serves from the session's own process, with its own copy of the model, as before.
-
-To stay current, run `repolore refresh`: it ingests what changed and rebuilds the index with the settings it was
-built with, and only one refresh runs at a time. Search keeps working meanwhile. An MCP client can do the same: the
-server's `refresh` tool starts one in the background, and `list_repos` says when the index was built, how the last
-refresh went and, while one runs, how far it has got (repos fetched, chunks embedded). Claude Code asks before the
-first call; to allow it for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings.
-To have Claude Code refresh once at the start of every session instead, add a `SessionStart` hook to
-`~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "matcher": "startup", "hooks": [{ "type": "command", "command": "repolore refresh", "async": true }] }
-    ]
-  }
-}
+```sh
+uv tool install --managed-python --python 3.12 repolore-mcp   # the repolore and repolore-mcp commands
+repolore setup                                                # pick repos, register with Claude Code, first refresh
 ```
 
-`uv tool upgrade repolore` updates repolore itself. On Windows, close the sessions using repolore (in Claude Code you
-can disable it in `/mcp` instead) and run `repolore server stop` first, since running programs keep their files
-locked. Elsewhere, a session opened before the upgrade says so on its next search; reconnect repolore in your client
-(`/mcp` in Claude Code).
+The package is `repolore-mcp`: PyPI's `repolore` is a different project.
 
-The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
-private repos' content, so treat that folder like the repos themselves.
+For GitHub access, being logged in with the [GitHub CLI](https://cli.github.com/) (`gh auth login`) is enough.
+Otherwise set `REPOLORE_GITHUB_TOKEN` to a classic token with the `repo` scope, plus `read:org` for organization
+repos. Organizations with SSO also need the token authorized for them.
 
-When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
-fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
-shared server and the MCP clients that have repolore registered. It makes one GitHub request, and when Claude Code is
-installed it asks `claude mcp get repolore`, which starts repolore to check that it connects.
+`repolore setup` checks the GitHub token, lists the repos it found and asks which to index, writes your pick to
+`repolore.toml`, registers repolore with Claude Code and Codex when they're on PATH, and starts the first refresh in
+the background. It finds the repos you own or can read as a collaborator or organization member, plus your own PRs
+and issues in other people's repos. Every question has a flag, which `repolore setup --help` lists, so it can run
+without asking: `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when
+`repolore.toml` exists).
 
-### Setting up by hand
+The first refresh downloads the embedding model from GitHub, about 1.4 GB, and embeds everything on your machine,
+which takes a while for a large account, so start with a few repos. As a rough guide, 3,713 chunks took 22 minutes
+to embed on a 12-core desktop CPU, after a 9-minute download. On Apple Silicon it embeds on the GPU through MLX; set
+`REPOLORE_DEVICE=cpu` to keep it on the CPU. `repolore doctor` shows how far it has got and which engine a build
+uses.
+
+<details>
+<summary><b>How the install works: Python, PyTorch, the latest main and uvx</b></summary>
+
+`--managed-python` makes uv use its own Python build, which can load the SQLite extension the index needs; some
+system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, run
+`uv tool update-shell` and open a new terminal. The install takes about 160 MB.
+
+Reranking (`--rerank`, off by default) needs PyTorch on top, about 900 MB more, and says how to add it when you ask
+for it.
+
+To run the latest `main` instead of the last release, install `git+https://github.com/ryckakas/repolore` the same
+way.
+
+Without a tool install, uvx runs it too:
+`uvx --managed-python --python 3.12 --from repolore-mcp repolore setup --no-register`, and the other commands the
+same way. See [Other MCP clients](https://github.com/ryckakas/repolore#other-mcp-clients) for launching the server
+like that.
+
+</details>
+
+<details>
+<summary><b>Setting up by hand</b></summary>
 
 `repolore setup` runs these steps, which you can also run yourself:
 
@@ -127,9 +113,77 @@ installed it asks `claude mcp get repolore`, which starts repolore to check that
    claude mcp add --scope user --transport stdio repolore -- repolore-mcp
    ```
 
-   For Codex and other clients, see [Other MCP clients](#other-mcp-clients).
+   For Codex and other clients, see [Other MCP clients](https://github.com/ryckakas/repolore#other-mcp-clients).
 
-### Other MCP clients
+</details>
+
+## Use it
+
+```sh
+repolore search "why did we drop the retry middleware?"
+repolore search "rate limit handling" --repo you/some-repo --kind pr -k 10
+repolore refresh          # fetch what changed and rebuild the index with its recorded settings
+repolore doctor           # check every part of the setup, with the fix for each failure
+repolore server status    # the shared MCP server; `repolore server stop` stops it
+```
+
+Or ask Claude Code in a new session. It gets `search`, `read`, `list_repos` and `refresh` tools and can answer
+questions about your history with links to the sources. `search` cuts each passage at 1,500 characters, and `read`
+returns a source's whole text from the index, plans and private repos included, a page at a time.
+
+<details>
+<summary><b>The shared server</b></summary>
+
+All sessions share one server that holds the model: each session's `repolore-mcp` is a small relay (about 70 MB)
+that starts the shared server when none is running and passes the tools through. The server loads the model in the
+background when it starts, which takes about half a minute, so only a search in that time waits for it, and it exits
+10 minutes after the last session closes. It listens on 127.0.0.1 only and needs a token that changes every time it
+starts. `repolore server status` shows it and `repolore server stop` stops it. `repolore-mcp --standalone` serves
+from the session's own process, with its own copy of the model, as before.
+
+</details>
+
+<details>
+<summary><b>Keeping it fresh</b></summary>
+
+`repolore refresh` ingests what changed and rebuilds the index with the settings it was built with, and only one
+refresh runs at a time. Search keeps working meanwhile. An MCP client can do the same: the server's `refresh` tool
+starts one in the background, and `list_repos` says when the index was built, how the last refresh went and, while
+one runs, how far it has got (repos fetched, chunks embedded). Claude Code asks before the first call; to allow it
+for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings. To have Claude Code
+refresh once at the start of every session instead, add a `SessionStart` hook to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup", "hooks": [{ "type": "command", "command": "repolore refresh", "async": true }] }
+    ]
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Upgrading, your data, and when something breaks</b></summary>
+
+`uv tool upgrade repolore-mcp` updates repolore itself. On Windows, close the sessions using repolore (in Claude Code
+you can disable it in `/mcp` instead) and run `repolore server stop` first, since running programs keep their files
+locked. Elsewhere, a session opened before the upgrade says so on its next search; reconnect repolore in your client
+(`/mcp` in Claude Code).
+
+The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
+private repos' content, so treat that folder like the repos themselves.
+
+When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
+fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
+shared server and the MCP clients that have repolore registered. It makes one GitHub request, and when Claude Code is
+installed it asks `claude mcp get repolore`, which starts repolore to check that it connects.
+
+</details>
+
+## Other MCP clients
 
 `repolore-mcp` is a standard stdio MCP server, so other clients can run it too. Most take a JSON entry in the
 portable `mcpServers` format (VS Code's own `mcp.json` calls the object `servers`):
@@ -138,8 +192,21 @@ portable `mcpServers` format (VS Code's own `mcp.json` calls the object `servers
 { "mcpServers": { "repolore": { "command": "repolore-mcp" } } }
 ```
 
-For Codex, add it to `~/.codex/config.toml` with longer timeouts. `repolore setup` adds this entry when `codex` is on
-PATH, with an `env_vars` line for the variables below that are set when it runs:
+A client can also launch it through `uvx`, without a tool install:
+
+```json
+{ "mcpServers": { "repolore": { "command": "uvx", "args": ["--managed-python", "--python", "3.12", "repolore-mcp"] } } }
+```
+
+The first launch downloads about 190 MB, which can take longer than a client waits for a server to start (30
+seconds in Claude Code), so run `uvx --managed-python --python 3.12 --from repolore-mcp repolore setup --no-register`
+once first: it fills uv's cache and sets repolore up.
+
+<details>
+<summary><b>Codex</b></summary>
+
+Add it to `~/.codex/config.toml` with longer timeouts. `repolore setup` adds this entry when `codex` is on PATH, with
+an `env_vars` line for the variables below that are set when it runs:
 
 ```toml
 [mcp_servers.repolore]
@@ -160,10 +227,13 @@ few more. That's enough for `gh auth token` (checked on Windows). If you rely on
 finds its folders through `XDG_*`, and the shared server, which every client's sessions share, and the refreshes it
 starts inherit the environment of whichever session started it.
 
+</details>
+
 ## What the experiments found
 
 Every retrieval choice was measured with `repolore eval` against 35 questions about the author's public repos, each
-with the sources expected to answer it. [EXPERIMENTS.md](EXPERIMENTS.md) has the full log. In short:
+with the sources expected to answer it.
+[EXPERIMENTS.md](https://github.com/ryckakas/repolore/blob/main/EXPERIMENTS.md) has the full log. In short:
 
 - **Plain vector search won.** Keyword search (BM25) alone was worse on every metric, because questions use plain
   words rather than the exact identifiers. Fusing the two rankings and reranking with a cross-encoder both gave
@@ -211,3 +281,15 @@ claude mcp add --scope user --transport stdio repolore -- uv run --directory /pa
 ```sh
 git config core.hooksPath .githooks
 ```
+
+## Documentation
+
+- [EXPERIMENTS.md](https://github.com/ryckakas/repolore/blob/main/EXPERIMENTS.md): every retrieval experiment and
+  its numbers
+- [AGENTS.md](https://github.com/ryckakas/repolore/blob/main/AGENTS.md): the architecture, stage by stage, and the
+  conventions for working on it
+- [SECURITY.md](https://github.com/ryckakas/repolore/blob/main/SECURITY.md): reporting a vulnerability
+
+## License
+
+MIT

@@ -18,7 +18,7 @@ from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import MCPError
 from mcp.types.version import LATEST_MODERN_VERSION
 
-from repolore import __version__
+from repolore import DIST, __version__
 from repolore.instructions import INSTRUCTIONS
 from repolore.paths import resolve_paths
 from repolore.processes import SAFE_PATH, spawn_detached
@@ -48,7 +48,7 @@ def start_server(files: ServerFiles) -> None:
 
 
 def installed_version() -> str:
-    return version("repolore")
+    return version(DIST)
 
 
 def find_or_start(files: ServerFiles, start: Callable[[ServerFiles], object] = start_server) -> Discovery:

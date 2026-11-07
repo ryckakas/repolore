@@ -17,7 +17,7 @@ REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 MAX_LENGTH = 256
 MISSING_EXTRA = (
     "Reranking needs PyTorch, which the rerank extra installs: uv tool install --managed-python --python 3.12 "
-    '"repolore[rerank] @ git+https://github.com/ryckakas/repolore"'
+    '--torch-backend cpu "repolore-mcp[rerank]"'
 )
 
 

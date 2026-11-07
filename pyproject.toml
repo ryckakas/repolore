@@ -1,5 +1,5 @@
 [project]
-name = "repolore"
+name = "repolore-mcp"
 dynamic = ["version"]
 description = "RAG over your own engineering history on GitHub, with a CLI and an MCP server."
 readme = "README.md"
@@ -7,6 +7,20 @@ authors = [
     { name = "ryckakas", email = "ryckakas@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "MIT"
+keywords = ["rag", "mcp", "github", "embeddings", "semantic-search", "claude-code"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+    "Topic :: Text Processing :: Indexing",
+]
 dependencies = [
     "anyio>=4.15.1",
     "filelock>=4.2.5",
@@ -49,6 +63,11 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[project.urls]
+Homepage = "https://github.com/ryckakas/repolore"
+Source = "https://github.com/ryckakas/repolore"
+Issues = "https://github.com/ryckakas/repolore/issues"
+
 [project.scripts]
 repolore = "repolore.cli:app"
 repolore-mcp = "repolore.relay:main"
@@ -57,6 +76,10 @@ repolore-mcp = "repolore.relay:main"
 # uv_build only takes a literal version; hatch-vcs derives it from the nearest vX.Y.Z tag and the commits since.
 requires = ["hatchling>=1.33.0,<2", "hatch-vcs>=0.5.0,<0.6"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The distribution is repolore-mcp (PyPI's repolore is another project); the package keeps its name.
+packages = ["src/repolore"]
 
 [tool.hatch.version]
 source = "vcs"

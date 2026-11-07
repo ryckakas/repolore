@@ -14,8 +14,8 @@ It is a **learning project first**: every stage (fetch, chunk, embed, retrieve, 
 evaluate) is written by hand so it stays visible. No LangChain, LlamaIndex, RAGAS or other
 RAG/eval frameworks. Prefer the approach that exposes how a stage works over one that hides it.
 
-It runs locally for a single user. Other people use it by running their own copy (`uv tool install` from
-the git repo + `claude mcp add`, as in the README quickstart) with their own GitHub token. No model API key
+It runs locally for a single user. Other people use it by running their own copy (`uv tool install
+repolore-mcp` from PyPI + `claude mcp add`, as in the README quickstart) with their own GitHub token. No model API key
 is needed: embeddings run locally. There is no hosted service and no GitHub App.
 
 ## Commands
@@ -23,8 +23,8 @@ is needed: embeddings run locally. There is no hosted service and no GitHub App.
 Python 3.12 (pinned in `.python-version`), managed with uv, which always uses its own Python build
 (`python-preference = "only-managed"`): some system builds, such as python.org's on macOS, can't load the
 sqlite-vec extension. A tool install doesn't read the project's `[tool.uv]` settings, so the README's
-install command passes `--managed-python` itself; `[tool.uv.sources]` does apply, so the `rerank` extra still gets
-the CPU torch.
+install command passes `--managed-python` itself; `[tool.uv.sources]` applies only to a checkout or a git install, so
+the `rerank` hint passes `--torch-backend cpu` for the CPU torch.
 Code that opens files always passes
 `encoding="utf-8"`, because the Windows default cp1252 codec breaks on GitHub content. Don't lean on
 `PYTHONUTF8=1` instead: installed users won't have it set, and CI's Windows job runs without it.
@@ -93,6 +93,13 @@ any later commit builds as the next patch's dev version with its commit, such as
 uncommitted changes add a date. Every tag must be a version: a tag hatch-vcs can't parse fails the build.
 `repolore version` prints the version, and the MCP server reports it to its client. The local editable install only
 rebuilds when tags change, so its version can lag behind the checked-out commit.
+
+The distribution is `repolore-mcp` on PyPI, since PyPI's `repolore` is another project; the package, the commands and
+the data folders keep the name `repolore`. Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which
+checks that the tag is on `main` and matches the wheel's version, publishes to PyPI by trusted publishing (the `pypi`
+environment admits only `v*` tags) and creates a GitHub Release with generated notes. A version on PyPI is permanent:
+a bad one is yanked and followed by the next patch. Dispatched by hand, the workflow rehearses on TestPyPI with a
+`.dev<run number>` version, from any branch once the file is on `main`.
 
 ## Architecture
 
@@ -173,7 +180,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   nothing to embed; `inspect` fetches the tokenizer alone. `search`, `eval` and the MCP server never download: without
   the files they raise `ModelUnavailableError`, which the CLI prints as one line and the MCP tool returns as its error.
 - `reranking.py` is the only code that needs PyTorch, through the `rerank` extra: sentence-transformers, with torch from
-  PyTorch's CPU index (`[tool.uv.sources]`; PyPI's Linux wheel bundles gigabytes of CUDA). Its model loads from the
+  PyTorch's CPU index (`[tool.uv.sources]` in a checkout, `--torch-backend cpu` in the install hint; PyPI's Linux
+  wheel bundles gigabytes of CUDA). Its model loads from the
   Hugging Face cache and goes to the Hub only to download a pinned revision that isn't cached yet; `hub.py` turns a
   failed download into a `ModelUnavailableError`. Without the extra, `--rerank` says how to install it.
 - `store.py` writes one SQLite file per index: `chunks`, a sqlite-vec `vec0` table filtered by repo,

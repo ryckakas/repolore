@@ -591,7 +591,11 @@ def _questions_or_exit(path: Path) -> QuestionSet:
     try:
         return load_questions(path)
     except FileNotFoundError:
-        typer.echo(f"No question file at {path}. Start from evals/questions.example.yaml.", err=True)
+        typer.echo(
+            f"No question file at {path}. Start from "
+            "https://github.com/ryckakas/repolore/blob/main/evals/questions.example.yaml.",
+            err=True,
+        )
     except (yaml.YAMLError, ValidationError) as error:
         typer.echo(f"{path} is invalid:\n{error}", err=True)
     raise typer.Exit(1)

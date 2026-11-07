@@ -106,6 +106,7 @@ def test_questions_defaults_to_the_config_dir_file(tmp_path: Path, monkeypatch: 
 
     assert result.exit_code == 1
     assert f"No question file at {missing}" in result.output
+    assert "blob/main/evals/questions.example.yaml" in result.output
 
 
 @pytest.mark.parametrize("content", ["questions: [", "questions:\n  - id: Not-Kebab\n"])

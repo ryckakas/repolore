@@ -1450,7 +1450,7 @@ wheels = [
 ]
 
 [[package]]
-name = "repolore"
+name = "repolore-mcp"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
