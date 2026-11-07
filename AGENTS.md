@@ -55,7 +55,8 @@ uv sync --extra rerank      # instead of plain uv sync, so pyright sees sentence
 uv run pyright              # type-check (standard mode)
 uv run bonsai-lint          # cognitive complexity, threshold in bonsai-lint.toml
 uv run pytest               # offline tests; `live` tests are deselected
-uv run pytest -m live       # tests that call real GitHub or download the model, run by hand
+uv run pytest -m live       # tests that call real GitHub or download the model, run by hand; on a Mac, also
+                            # MLX on the GPU against ONNX Runtime
 uv run pytest --cov         # tests with the coverage floor CI enforces (90%, branch coverage)
 uv audit --locked --preview-features audit-command   # known advisories in uv.lock
 ```
@@ -144,8 +145,20 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   hands token ids to an engine. `OnnxEngine` runs `voyage-4-nano` (1024 dimensions, float32) on ONNX Runtime's CPU
   kernels, with mean pooling and normalization in numpy. It gives each text its own run: every attention layer is a
   `MultiHeadAttention` node, whose CPU kernel is flash attention only without a padding mask, so the graph has none and
-  a padded batch would give wrong vectors. That keeps memory linear in a text's length. Every platform builds on the
-  CPU for now; Apple Silicon's GPU comes back through MLX in #89. `model_id` still names the Hugging Face revision the
+  a padded batch would give wrong vectors. That keeps memory linear in a text's length. On Apple Silicon, `build`
+  embeds with `embedding/mlx_engine.py` instead: the transformer written out by hand in MLX (norms, rotary positions,
+  grouped-query attention through `mx.fast.scaled_dot_product_attention`, the MLP, the projection, pooling), run on
+  the GPU on padded batches with a key mask. Each batch pads to a multiple of 32, because other lengths run about 2x
+  slower there. It reads the weights from the release's `voyage-4-nano.onnx.data` through
+  `embedding/voyage-4-nano.tensors.json`, which repolore-models' `tensors.py` writes: the export renamed every tensor
+  and stores the matmul weights transposed, so the manifest maps each name to an offset, and the loader transposes
+  them back. `embedding/engines.py` picks MLX when the platform is darwin arm64, `mlx` imports and
+  `mx.is_available(mx.gpu)` (not `mx.metal.is_available()`, which the Metal build always answers true), unless
+  `REPOLORE_DEVICE=cpu`; other platforms never import `mlx`. A Metal failure mid-build stops the build with one line
+  naming `REPOLORE_DEVICE=cpu`; the embedding cache keeps the batches already done. Queries, `inspect` and the server
+  always use ONNX Runtime. `mlx` is pinned exactly, because CI can't run Metal and a tool install ignores `uv.lock`:
+  check a bump with `uv run pytest -m live` on a Mac. The dev group installs `mlx` with `mlx-cpu` on Windows and
+  Linux, so pyright and the MLX tests run there on the CPU backend. `model_id` still names the Hugging Face revision the
   graph was exported from, because the vectors match that revision's to float rounding, so the embedding cache and
   existing indexes stay valid. An index records its model, and `embedder_for` refuses any other, which needs a rebuild.
   `count_tokens` reads only `tokenizer.json` (no weights), and `build_index` uses it to batch by padded tokens, since
@@ -193,7 +206,7 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   itself and forwards `tools/list` and `tools/call` to one shared server per data dir and index, through an MCP client
   over Streamable HTTP, a new connection per call. It starts that server when none runs, replaces one of another
   version, retries a call once if the server went away, and asks the session to reconnect in `/mcp` when repolore
-  was upgraded under it. It imports only the MCP SDK and the small state modules, never onnxruntime, numpy or
+  was upgraded under it. It imports only the MCP SDK and the small state modules, never onnxruntime, mlx, numpy or
   sqlite-vec: about 70 MB per session instead of the model's 870 MB. `--standalone` serves the tools from the relay
   process itself, model included, as before.
 - `shared_server.py` is `repolore server run`: the tools over Streamable HTTP from our own `uvicorn.Server` on

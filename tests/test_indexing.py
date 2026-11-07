@@ -7,6 +7,7 @@ from conftest import DocumentFactory, FakeEmbedder
 
 from repolore import indexing
 from repolore.chunking import Chunk, chunk_document
+from repolore.embedding import ModelUnavailableError, Vectors
 from repolore.indexing import MAX_BATCH, BuildSettings, build_index
 from repolore.progress import Phase, Progress
 from repolore.store import EmbeddingCache, cache_key, connect, index_model
@@ -46,6 +47,26 @@ def test_the_cache_is_shared_between_indexes(tmp_path: Path, corpus: list[Chunk]
 
 def same_length_chunks(make_document: DocumentFactory, count: int) -> list[Chunk]:
     return [chunk for n in range(1, count + 1) for chunk in chunk_document(make_document(n, f"Text {n % 10}."))]
+
+
+def test_a_build_that_fails_midway_keeps_the_batches_it_finished(
+    tmp_path: Path, fake_embedder: FakeEmbedder, make_document: DocumentFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chunks = same_length_chunks(make_document, MAX_BATCH + 1)
+    original = FakeEmbedder.embed_documents
+
+    def failing_second_batch(self: FakeEmbedder, texts: Sequence[str]) -> Vectors:
+        if self.batches:
+            raise ModelUnavailableError("MLX failed on the GPU")
+        return original(self, texts)
+
+    monkeypatch.setattr(FakeEmbedder, "embed_documents", failing_second_batch)
+
+    with pytest.raises(ModelUnavailableError):
+        build(tmp_path, chunks, fake_embedder)
+
+    monkeypatch.undo()
+    assert build(tmp_path, chunks, FakeEmbedder()) == 1
 
 
 def test_short_chunks_share_batches_up_to_the_cap(

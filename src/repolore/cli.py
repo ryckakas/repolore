@@ -24,6 +24,7 @@ from repolore.discovery import discover
 from repolore.doctor import diagnose, github_access
 from repolore.documents import Document, DocumentKind
 from repolore.embedding import ModelUnavailableError
+from repolore.embedding.engines import build_engine
 from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, UnknownModelError, embedder_for
 from repolore.evals.harness import (
     METRICS,
@@ -285,9 +286,11 @@ def build(
 
 def _build(paths: AppPaths, db: str, settings: BuildSettings, report: Report = ignore) -> None:
     index_file = paths.index_file(db)
-    model = LocalEmbedder(VOYAGE_NANO, paths.models_dir)
+    engine = build_engine()
+    model = LocalEmbedder(VOYAGE_NANO, paths.models_dir, engine.load)
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
     typer.echo(f"Building with {settings.described(limit)}.")
+    typer.echo(f"Embedding with {engine.name}.")
     documents = _cached_documents(paths, settings.bot_reviews)
     with _exit_on(ModelUnavailableError):
         model.download(report)

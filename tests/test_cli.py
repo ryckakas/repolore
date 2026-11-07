@@ -23,7 +23,8 @@ from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
 from repolore.documents import Document
 from repolore.embedding import ModelUnavailableError
-from repolore.embedding.local import VOYAGE_NANO, LocalModel
+from repolore.embedding.engines import EngineChoice
+from repolore.embedding.local import VOYAGE_NANO, LocalModel, onnx_engine
 from repolore.locks import hold
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report
@@ -318,7 +319,30 @@ def cached_crashcause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     shutil.copytree(FIXTURES / "crashcause", data_dir / "raw" / "ryckakas" / "crashcause")
     monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_, **__: FakeEmbedder())
     monkeypatch.setattr("repolore.cli.embedder_for", lambda *_: FakeEmbedder())
+    monkeypatch.setattr("repolore.cli.build_engine", lambda: EngineChoice("a test engine", onnx_engine))
     return data_dir
+
+
+def test_build_says_which_engine_embeds(cached_crashcause: Path) -> None:
+    result = runner.invoke(app, ["build"])
+
+    assert "Embedding with a test engine." in result.output
+
+
+def test_build_hands_the_chosen_engine_to_the_embedder(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loads: list[object] = []
+
+    def local_embedder(_: LocalModel, __: Path, load: object) -> FakeEmbedder:
+        loads.append(load)
+        return FakeEmbedder()
+
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", local_embedder)
+
+    runner.invoke(app, ["build"])
+
+    assert loads == [onnx_engine]
 
 
 def test_build_embeds_new_chunks_and_reuses_them_next_time(cached_crashcause: Path) -> None:
@@ -694,7 +718,7 @@ def test_build_and_inspect_keep_the_model_under_the_data_dir(
 ) -> None:
     folders: list[Path] = []
 
-    def local_embedder(_: LocalModel, models_dir: Path) -> FakeEmbedder:
+    def local_embedder(_: LocalModel, models_dir: Path, *__: object) -> FakeEmbedder:
         folders.append(models_dir)
         return FakeEmbedder()
 
