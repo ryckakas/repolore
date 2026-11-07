@@ -8,6 +8,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -22,7 +23,7 @@ from repolore.config import Config, load_config
 from repolore.discovery import discover
 from repolore.doctor import diagnose, github_access
 from repolore.documents import Document, DocumentKind
-from repolore.embedding.local import LocalEmbedder, UnknownModelError, embedder_for
+from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, UnknownModelError, embedder_for
 from repolore.evals.harness import (
     METRICS,
     SEARCH_DEPTH,
@@ -215,10 +216,12 @@ def inspect(
     seed: Annotated[int | None, typer.Option(help="Seed for picking the samples, to see the same ones again.")] = None,
 ) -> None:
     """Chunk the cached documents as a default build would, and show counts, a token histogram and random samples."""
-    documents = _cached_documents(ctx.obj)
-    embedder = LocalEmbedder()
+    paths: AppPaths = ctx.obj
+    documents = _cached_documents(paths)
+    embedder = LocalEmbedder(VOYAGE_NANO, paths.models_dir)
     limit = chunk_limit(None, embedder.max_tokens)
     with _exit_on(ModelUnavailableError):
+        embedder.download_tokenizer()
         chunks = [chunk for document in documents for chunk in chunk_document(document, limit, embedder.count_tokens)]
         tokens = embedder.count_tokens([chunk.embedded_text for chunk in chunks])
     typer.echo(f"{len(documents)} documents, {len(chunks)} chunks")
@@ -282,13 +285,13 @@ def build(
 
 def _build(paths: AppPaths, db: str, settings: BuildSettings, report: Report = ignore) -> None:
     index_file = paths.index_file(db)
-    # Only a build embeds enough to gain from the GPU; queries stay on the CPU, which the MCP server's threads share.
-    model = LocalEmbedder(use_gpu=True)
+    model = LocalEmbedder(VOYAGE_NANO, paths.models_dir)
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
     typer.echo(f"Building with {settings.described(limit)}.")
     documents = _cached_documents(paths, settings.bot_reviews)
-    report(Progress(phase=Phase.CHUNK))
     with _exit_on(ModelUnavailableError):
+        model.download(report)
+        report(Progress(phase=Phase.CHUNK))
         chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
     typer.echo(_limit_note(limit, chunks))
     with (
@@ -499,7 +502,7 @@ def search(
     filters = Filters(repo=repo, kind=kind, author=author)
     with _exit_on(*SEARCH_ERRORS), closing(connect(index_file)) as index:
         reranker = CrossEncoderReranker() if rerank else None
-        embedder = embedder_for(index_model(index)[0])
+        embedder = embedder_for(index_model(index)[0], paths.models_dir)
         hits = search_index(index, embedder, query, k, filters, mode, reranker, distinct=distinct)
     if not hits:
         typer.echo("No matches.")
@@ -533,7 +536,7 @@ def eval_(
     index_file = _index_or_exit(paths, db)
     with _exit_on(*SEARCH_ERRORS), closing(connect(index_file)) as index:
         settings = index_settings(index)
-        embedder = embedder_for(settings["model_id"])
+        embedder = embedder_for(settings["model_id"], paths.models_dir)
         missing = {source.url for q in questions for source in q.expected} - indexed_urls(index)
         chunks = sum(sum(kinds.values()) for kinds in repo_counts(index).values())
         reranker = CrossEncoderReranker() if rerank else None
@@ -642,7 +645,8 @@ def server_run(
     from repolore.shared_server import run_shared
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    if not run_shared(ctx.obj, db, idle_minutes, embedder_for):
+    paths: AppPaths = ctx.obj
+    if not run_shared(paths, db, idle_minutes, partial(embedder_for, models_dir=paths.models_dir)):
         _fail(f"A shared server for {db} is already running; `repolore server stop` stops it.")
 
 

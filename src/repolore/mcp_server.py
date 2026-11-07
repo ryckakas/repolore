@@ -3,6 +3,7 @@ import sqlite3
 import threading
 from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Annotated
 
@@ -273,7 +274,8 @@ def _source(url: str, passages: list[Passage], start: int) -> Source:
 def serve(data_dir: Path | None, db: str, preload_model: bool) -> None:
     """Serve search over the repolore index to an MCP client on stdin and stdout."""
     paths = resolve_paths(data_dir)
-    server = create_server(paths, db, embedder_for)
+    embedder = partial(embedder_for, models_dir=paths.models_dir)
+    server = create_server(paths, db, embedder)
     if preload_model:
-        preload(paths.index_file(db), embedder_for)
+        preload(paths.index_file(db), embedder)
     server.run()

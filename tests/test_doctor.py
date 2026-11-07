@@ -290,37 +290,35 @@ def test_the_index_model_is_found_in_the_cache(
     tmp_path: Path, corpus: list[Chunk], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     checked = []
-    monkeypatch.setattr(doctor, "is_cached", lambda spec: checked.append(spec) or True)
-    monkeypatch.setattr(doctor, "cache_dir", lambda: "/hf")
+    monkeypatch.setattr(doctor, "is_downloaded", lambda spec, folder: checked.append((spec, folder)) or True)
+    models_dir = tmp_path / "models"
 
-    check = model_check(index_built_with(tmp_path, VOYAGE_NANO.model_id, corpus))
+    check = model_check(index_built_with(tmp_path, VOYAGE_NANO.model_id, corpus), models_dir)
 
-    assert check == Check("model", True, f"{VOYAGE_NANO.model_id} is in /hf")
-    assert checked == [VOYAGE_NANO]
+    assert check == Check("model", True, f"{VOYAGE_NANO.model_id} is in {models_dir / 'voyage-4-nano-1'}")
+    assert checked == [(VOYAGE_NANO, models_dir)]
 
 
 @pytest.mark.parametrize("index", ["none", "empty"])
-def test_without_a_readable_index_the_default_model_is_checked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index: str
-) -> None:
+def test_without_a_readable_index_the_default_model_is_checked(tmp_path: Path, index: str) -> None:
     index_file = tmp_path / "default.db"
     if index == "empty":
         sqlite3.connect(index_file).close()
-    monkeypatch.setattr(doctor, "is_cached", lambda _: False)
-    monkeypatch.setattr(doctor, "cache_dir", lambda: "/hf")
+    folder = tmp_path / "models" / "voyage-4-nano-1"
 
-    check = model_check(index_file)
+    check = model_check(index_file, tmp_path / "models")
 
     assert check == Check(
         "model",
         False,
-        f"{VOYAGE_NANO.model_id} isn't in /hf yet",
-        "the next build or search downloads it; it needs access to huggingface.co",
+        f"{VOYAGE_NANO.model_id} isn't in {folder} yet",
+        "`repolore refresh` downloads it, 1.4 GB; behind a proxy that blocks github.com, "
+        f"put the files from {VOYAGE_NANO.release.url} there by hand",
     )
 
 
-def test_an_index_built_with_a_model_repolore_cant_load_fails(index_file: Path) -> None:
-    check = model_check(index_file)
+def test_an_index_built_with_a_model_repolore_cant_load_fails(tmp_path: Path, index_file: Path) -> None:
+    check = model_check(index_file, tmp_path)
 
     assert check == Check(
         "model", False, "the index was built with fake-bag-of-words, which repolore can't load", "`repolore build`"

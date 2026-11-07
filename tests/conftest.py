@@ -16,6 +16,7 @@ from repolore.chunking import Chunk, chunk_document
 from repolore.documents import Document, DocumentKind, Visibility
 from repolore.embedding import Vectors
 from repolore.paths import AppPaths
+from repolore.progress import Report, ignore
 from repolore.server_state import Discovery, ServerFiles, is_running, read_discovery, request_stop
 from repolore.shared_server import run_shared
 from repolore.store import connect, write_index
@@ -34,6 +35,14 @@ class FakeEmbedder:
         self.embedded: list[str] = []
         self.batches: list[list[str]] = []
         self.warm_ups = 0
+        self.downloads = 0
+        self.tokenizer_downloads = 0
+
+    def download(self, report: Report = ignore) -> None:
+        self.downloads += 1
+
+    def download_tokenizer(self) -> None:
+        self.tokenizer_downloads += 1
 
     def warm_up(self) -> None:
         self.warm_ups += 1

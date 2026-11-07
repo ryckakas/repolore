@@ -13,8 +13,7 @@ from pydantic import ValidationError
 from repolore import __version__
 from repolore.clients import CLIENTS, McpClient, registration
 from repolore.config import load_config
-from repolore.embedding.local import VOYAGE_NANO, is_cached, spec_for
-from repolore.hub import cache_dir
+from repolore.embedding.local import VOYAGE_NANO, is_downloaded, spec_for
 from repolore.indexing import WHOLE
 from repolore.paths import AppPaths
 from repolore.refresh import LOG_FILE, refresh_status
@@ -57,7 +56,7 @@ def diagnose(
     yield github_check(connect)
     yield config_check(paths.config_file)
     yield index_check(index_file)
-    yield model_check(index_file)
+    yield model_check(index_file, paths.models_dir)
     yield refresh_check(paths.data_dir)
     yield server_check(ServerFiles(paths.data_dir, db))
     for client in clients:
@@ -160,20 +159,24 @@ def index_check(index_file: Path) -> Check:
     )
 
 
-def model_check(index_file: Path) -> Check:
+def model_check(index_file: Path, models_dir: Path) -> Check:
     model_id = _index_model(index_file)
     spec = VOYAGE_NANO if model_id is None else spec_for(model_id)
     if spec is None:
         return Check(
             "model", False, f"the index was built with {model_id}, which repolore can't load", "`repolore build`"
         )
-    if is_cached(spec):
-        return Check("model", True, f"{spec.model_id} is in {cache_dir()}")
+    release = spec.release
+    folder = release.folder(models_dir)
+    if is_downloaded(spec, models_dir):
+        return Check("model", True, f"{spec.model_id} is in {folder}")
+    size = sum(file.size for file in release.files) / 1e9
     return Check(
         "model",
         False,
-        f"{spec.model_id} isn't in {cache_dir()} yet",
-        "the next build or search downloads it; it needs access to huggingface.co",
+        f"{spec.model_id} isn't in {folder} yet",
+        f"`repolore refresh` downloads it, {size:.1f} GB; behind a proxy that blocks github.com, "
+        f"put the files from {release.url} there by hand",
     )
 
 
