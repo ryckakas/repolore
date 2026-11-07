@@ -42,7 +42,7 @@ from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report, ignore
-from repolore.refresh import LOG_FILE, RefreshRunning, refreshing, start_refresh
+from repolore.refresh import LOG_FILE, RefreshRunning, refresh_due, refreshing, start_refresh
 from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
@@ -252,6 +252,9 @@ def _print_histogram(tokens: list[int]) -> None:
 
 
 DEFAULT_INDEX = "default"
+SESSION_REFRESH_HOURS = 12.0
+# Claude Code exports the plugin's refresh_hours option under this name, and only once the user has set it.
+PLUGIN_REFRESH_HOURS = "CLAUDE_PLUGIN_OPTION_REFRESH_HOURS"
 SNIPPET_CHARS = 300
 IndexOption = Annotated[str, typer.Option("--db", help="Name of the index to use, one per pipeline config.")]
 ModeOption = Annotated[Mode, typer.Option(help="Vector (meaning), keyword (BM25) or hybrid (both, fused by rank).")]
@@ -324,6 +327,30 @@ def refresh(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
     with _exit_on(RefreshRunning), refreshing(paths.data_dir) as report:
         _print_counts(_ingest(paths, full=False, report=report))
         _build(paths, db, _recorded_settings(paths.index_file(db)), report)
+
+
+@app.command()
+def session_start(
+    ctx: typer.Context,
+    hours: Annotated[
+        float,
+        typer.Option(
+            min=0,
+            envvar=PLUGIN_REFRESH_HOURS,
+            help="Refresh when the last refresh started at least this many hours ago; 0 never does.",
+        ),
+    ] = SESSION_REFRESH_HOURS,
+    db: IndexOption = DEFAULT_INDEX,
+) -> None:
+    """Start a refresh in the background when the index is due for one, for Claude Code's SessionStart hook.
+
+    It prints nothing and returns at once. It skips before the first build and while a refresh runs. The Claude Code
+    plugin's refresh_hours option sets --hours.
+    """
+    paths: AppPaths = ctx.obj
+    if refresh_due(paths.data_dir, paths.index_file(db), hours):
+        with _exit_on(OSError):
+            start_refresh(paths.data_dir, db)
 
 
 def _recorded_settings(index_file: Path) -> BuildSettings:
@@ -468,7 +495,7 @@ def _setup_client(client: McpClient, answer: bool | None) -> None:
     elif found.found:
         status = f" ({found.status})" if found.status else ""
         hint = "" if found.healthy else "; `repolore doctor` says how to fix it"
-        typer.echo(f"{client.name}: repolore is already registered{status}{hint}.")
+        typer.echo(f"{client.name}: repolore is already registered{found.alias}{status}{hint}.")
     elif _asked(answer, f"Register repolore with {client.name}?", default=True):
         typer.echo(f"{client.name}: registered repolore {register(client)}.")
 

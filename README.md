@@ -52,13 +52,45 @@ repos. Organizations with SSO also need the token authorized for them.
 the background. It finds the repos you own or can read as a collaborator or organization member, plus your own PRs
 and issues in other people's repos. Every question has a flag, which `repolore setup --help` lists, so it can run
 without asking: `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when
-`repolore.toml` exists).
+`repolore.toml` exists). In Claude Code, the plugin can register it instead and adds a refresh at session start;
+see "The Claude Code plugin" below.
 
 The first refresh downloads the embedding model from GitHub, about 1.4 GB, and embeds everything on your machine,
 which takes a while for a large account, so start with a few repos. As a rough guide, 3,713 chunks took 22 minutes
 to embed on a 12-core desktop CPU, after a 9-minute download. On Apple Silicon it embeds on the GPU through MLX; set
 `REPOLORE_DEVICE=cpu` to keep it on the CPU. `repolore doctor` shows how far it has got and which engine a build
 uses.
+
+<details>
+<summary><b>The Claude Code plugin</b></summary>
+
+This repo is also a Claude Code plugin marketplace. Its plugin registers the MCP server and, when a session starts,
+refreshes the index in the background if the last refresh is at least 12 hours old. It needs repolore-mcp 0.3.0 or
+later installed as above. Install the plugin before running `repolore setup`, which then sees its server and leaves
+the registration to it:
+
+```text
+/plugin install repolore --marketplace ryckakas/repolore
+```
+
+That works in one step from Claude Code 2.1.275; on older versions, run `/plugin marketplace add ryckakas/repolore`,
+then `/plugin install repolore@repolore`. The plugin's tools are named `mcp__plugin_repolore_repolore__search` and so
+on.
+
+The plugin's `refresh_hours` option sets the interval, and `0` turns the refresh off: `/plugin`, then Installed,
+repolore and Configure options. The refresh skips until `repolore setup` has built the index, and while another
+refresh runs.
+
+If Claude Code also has repolore registered for every project with the same command, it uses that registration,
+leaves the plugin's server out, and the tools keep their `mcp__repolore__` names. A registration with another command,
+such as a checkout run through `uv run`, runs beside the plugin's, and Claude sees every tool twice; keep one, with
+`claude mcp remove repolore --scope user` or by disabling the plugin.
+
+Claude Code doesn't update plugins from other people's marketplaces by itself: `/plugin marketplace update repolore`
+fetches the latest plugin, or turn on auto-update for the marketplace in `/plugin` under Marketplaces. The plugin
+doesn't update repolore itself; `uv tool upgrade repolore-mcp` does.
+
+</details>
 
 <details>
 <summary><b>How the install works: Python, PyTorch, the latest main and uvx</b></summary>
@@ -155,18 +187,29 @@ from the session's own process, with its own copy of the model, as before.
 refresh runs at a time. Search keeps working meanwhile. An MCP client can do the same: the server's `refresh` tool
 starts one in the background, and `list_repos` says when the index was built, how the last refresh went and, while
 one runs, how far it has got (repos fetched, chunks embedded). Claude Code asks before the first call; to allow it
-for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings. To have Claude Code
-refresh once at the start of every session instead, add a `SessionStart` hook to `~/.claude/settings.json`:
+for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings, or
+`mcp__plugin_repolore_repolore__refresh` when the plugin provides the server.
+
+The plugin also refreshes when a session starts and the last refresh is at least 12 hours old. Without the plugin, a
+`SessionStart` hook in `~/.claude/settings.json` does the same:
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      { "matcher": "startup", "hooks": [{ "type": "command", "command": "repolore refresh", "async": true }] }
+      {
+        "matcher": "startup",
+        "hooks": [
+          { "type": "command", "command": "repolore", "args": ["session-start", "--hours", "12"], "async": true }
+        ]
+      }
     ]
   }
 }
 ```
+
+`repolore session-start` starts the refresh in the background and returns at once, so the session doesn't wait for
+it and closing the session doesn't stop it; Claude Code ends a hook's own process with its session.
 
 </details>
 
@@ -184,7 +227,8 @@ private repos' content, so treat that folder like the repos themselves.
 When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
 fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
 shared server and the MCP clients that have repolore registered. It makes one GitHub request, and when Claude Code is
-installed it asks `claude mcp get repolore`, which starts repolore to check that it connects.
+installed it asks `claude mcp get repolore` (or `plugin:repolore:repolore`, the plugin's server), which starts
+repolore to check that it connects.
 
 </details>
 

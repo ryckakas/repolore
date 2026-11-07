@@ -241,12 +241,12 @@ def registration_check(client: McpClient) -> Check | None:
     if not found.found:
         said = f" ({found.status})" if found.status else ""
         return Check(client.name, False, f"repolore isn't registered{said}", client.register)
-    status = f": {found.status}" if found.status else ""
+    registered = f"repolore is registered{found.alias}" + (f": {found.status}" if found.status else "")
     if not found.healthy:
         return Check(
             client.name,
             False,
-            f"repolore is registered{status}",
+            registered,
             "`repolore server stop`, then reconnect repolore in the client; `repolore server status` names its log",
         )
-    return Check(client.name, True, f"repolore is registered{status}")
+    return Check(client.name, True, registered)

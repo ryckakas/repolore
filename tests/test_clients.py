@@ -12,6 +12,7 @@ from repolore.clients import (
     CODEX,
     CODEX_PASSES_ON,
     GET_SECONDS,
+    PLUGIN_SERVER,
     Registration,
     RegistrationError,
     codex_home,
@@ -99,6 +100,51 @@ def test_a_client_that_doesnt_know_repolore_has_no_registration(
     answer(monkeypatch, runs, 1, "No MCP server named repolore")
 
     assert registration(CODEX) == Registration(found=False, status="No MCP server named repolore")
+
+
+def answers(monkeypatch: pytest.MonkeyPatch, runs: list[list[str]], *replies: tuple[int, str]) -> None:
+    def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        code, stdout = replies[len(runs)]
+        runs.append(command)
+        return subprocess.CompletedProcess(command, code, stdout=stdout)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+NOT_FOUND = 'No MCP server named "repolore". Configured servers: plugin:repolore:repolore'
+
+
+def test_claude_code_finds_the_server_the_plugin_provides(
+    monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]
+) -> None:
+    answers(monkeypatch, runs, (1, NOT_FOUND), (0, CLAUDE_HEALTHY))
+
+    found = registration(CLAUDE_CODE)
+
+    assert found == Registration(found=True, status="✓ Connected", name=PLUGIN_SERVER)
+    assert found is not None
+    assert found.alias == " as plugin:repolore:repolore"
+    assert runs == [["/bin/claude", "mcp", "get", "repolore"], ["/bin/claude", "mcp", "get", PLUGIN_SERVER]]
+
+
+def test_claude_code_without_either_registration_says_what_it_said_first(
+    monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]
+) -> None:
+    answers(monkeypatch, runs, (1, NOT_FOUND), (1, "No MCP server named plugin:repolore:repolore"))
+
+    assert registration(CLAUDE_CODE) == Registration(found=False, status=NOT_FOUND)
+    assert len(runs) == 2
+
+
+def test_codex_has_no_plugin_to_look_for(monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]) -> None:
+    answers(monkeypatch, runs, (1, "No MCP server named repolore"))
+
+    assert registration(CODEX) == Registration(found=False, status="No MCP server named repolore")
+    assert runs == [["/bin/codex", "mcp", "get", "repolore"]]
+
+
+def test_a_registration_under_repolores_own_name_has_no_alias() -> None:
+    assert Registration(found=True).alias == ""
 
 
 def test_a_client_that_fails_silently_has_no_registration(

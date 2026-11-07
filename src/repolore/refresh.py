@@ -4,7 +4,7 @@ import sys
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from filelock import Timeout
@@ -75,6 +75,15 @@ def refresh_status(data_dir: Path) -> RefreshStatus:
         # older version that wrote it in place.
         status = RefreshStatus()
     return status.model_copy(update={"running": _is_running(data_dir), "log_tail": _log_tail(data_dir, status)})
+
+
+def refresh_due(data_dir: Path, index_file: Path, hours: float) -> bool:
+    """Whether a session start should refresh: the index is built and the last refresh, whatever its outcome, started
+    at least hours ago. Never when hours is 0, and never before the first build, which `repolore setup` starts."""
+    if hours <= 0 or not index_file.exists():
+        return False
+    started = refresh_status(data_dir).started_at
+    return started is None or datetime.now(UTC) - datetime.fromisoformat(started) >= timedelta(hours=hours)
 
 
 def start_refresh(data_dir: Path, db: str) -> bool:

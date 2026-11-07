@@ -1,0 +1,12 @@
+{
+  "name": "repolore",
+  "owner": { "name": "Ricardas Kauneckas", "url": "https://github.com/ryckakas" },
+  "description": "repolore: search your own engineering history on GitHub from Claude Code.",
+  "plugins": [
+    {
+      "name": "repolore",
+      "source": "./plugins/repolore",
+      "description": "Registers the repolore MCP server and refreshes its index in the background when a session starts."
+    }
+  ]
+}
