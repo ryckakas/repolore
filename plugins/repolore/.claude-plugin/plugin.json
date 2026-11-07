@@ -1,0 +1,18 @@
+{
+  "name": "repolore",
+  "description": "Search your own pull requests, reviews, issues, commits and repo docs on GitHub. Needs repolore-mcp 0.3.0 or later: uv tool install --managed-python --python 3.12 repolore-mcp, then repolore setup.",
+  "author": { "name": "Ricardas Kauneckas", "url": "https://github.com/ryckakas" },
+  "homepage": "https://github.com/ryckakas/repolore",
+  "repository": "https://github.com/ryckakas/repolore",
+  "license": "MIT",
+  "keywords": ["rag", "mcp", "github", "semantic-search"],
+  "userConfig": {
+    "refresh_hours": {
+      "type": "number",
+      "title": "Refresh interval (hours)",
+      "description": "Start a background refresh when a session starts and the last refresh is at least this many hours old; 0 turns it off.",
+      "default": 12,
+      "min": 0
+    }
+  }
+}

@@ -15,7 +15,8 @@ evaluate) is written by hand so it stays visible. No LangChain, LlamaIndex, RAGA
 RAG/eval frameworks. Prefer the approach that exposes how a stage works over one that hides it.
 
 It runs locally for a single user. Other people use it by running their own copy (`uv tool install
-repolore-mcp` from PyPI + `claude mcp add`, as in the README quickstart) with their own GitHub token. No model API key
+repolore-mcp` from PyPI + `repolore setup`, which runs `claude mcp add`, or the Claude Code plugin in
+`plugins/repolore/`, as in the README) with their own GitHub token. No model API key
 is needed: embeddings run locally. There is no hosted service and no GitHub App.
 
 ## Commands
@@ -41,6 +42,8 @@ uv run repolore build       # embed what changed and write the index (<data-dir>
                             # --bot-reviews/--no-bot-reviews keeps or drops review threads started by bots;
                             # a left-out option keeps the index's last value)
 uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
+uv run repolore session-start  # what the plugin's SessionStart hook runs: a background refresh when the last one
+                            # started --hours ago or more (default 12, or the plugin's refresh_hours option)
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore doctor      # check the setup, each part as a pass or a fail with its fix; exits 1 on a fail
@@ -229,6 +232,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   gets them when the phase changes or every 2 seconds, replaced atomically for readers such as `list_repos`. The MCP
   `refresh` tool doesn't refresh in the server: it starts `python -m repolore refresh` as a detached process that
   writes to `refresh.log` and outlives the session, so the server loads no second model and blocks no worker thread.
+  `repolore session-start` starts the same detached refresh when `refresh_due` says so: the index is built and the
+  last refresh, whatever its outcome, started at least `--hours` ago. A hook can't run `repolore refresh` itself:
+  Claude Code kills an async hook's process when the session ends.
 - `processes.py` starts those detached processes, the refresh and the shared server, in the data dir and with
   `python -P`, so the session's project directory is neither locked nor on their import path. On Windows, Claude Code
   stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
@@ -238,13 +244,23 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   not hash), the last refresh, the shared server and the MCP clients' registrations. The GitHub check is its one
   request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
   never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` asks
-  each MCP client CLI on PATH (`claude`, `codex`) with `mcp get repolore`; Claude Code starts the server to check it.
+  each MCP client CLI on PATH (`claude`, `codex`) with `mcp get repolore`, and Claude Code also with
+  `mcp get plugin:repolore:repolore`, the plugin's server; Claude Code starts the server to check it.
 - `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
   local roots, and writing `repolore.toml`. The command reuses doctor's GitHub check and stops only when the token
   doesn't work. `clients.py` registers repolore: `claude mcp add --scope user`, and for Codex an entry appended to
   `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp add` can't set the timeouts. A client that already has
   repolore is left alone.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
+- `.claude-plugin/marketplace.json` makes the repo a Claude Code plugin marketplace whose one plugin is
+  `plugins/repolore/`: `.mcp.json` registers `repolore-mcp`, and `hooks/hooks.json` runs `repolore session-start`
+  (exec form, async) when a session starts. The hook passes no `${user_config.*}`, because Claude Code fails a hook
+  whose option isn't set, and an option left at its default isn't; `session-start` reads
+  `CLAUDE_PLUGIN_OPTION_REFRESH_HOURS` instead and falls back to its own default. The plugin has no `version`, so
+  Claude Code versions it by commit and serves `main`: a plugin change that needs a new command needs a release right
+  after its merge. A plugin's settings can't grant permissions, and its tools are named
+  `mcp__plugin_repolore_repolore__*` unless a user-scope `repolore` with the same command wins. `tests/test_plugin.py`
+  checks the files against the code; `claude plugin validate .` checks them against Claude Code.
 
 Nothing is async except the relay's forwarding and the shared server's watcher, which live on the SDK's event loop:
 the MCP SDK runs the plain `def` tools on worker threads (40, shared by every session), and the rest of the pipeline

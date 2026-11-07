@@ -9,6 +9,8 @@ from pathlib import Path
 
 SERVER = "repolore"
 RELAY = "repolore-mcp"
+# `claude mcp get repolore` doesn't find the server the plugin provides: Claude Code names it this way.
+PLUGIN_SERVER = f"plugin:{SERVER}:{SERVER}"
 GET_SECONDS = 120
 ADD_SECONDS = 60
 CODEX_ENTRY = f"""[mcp_servers.{SERVER}]
@@ -82,13 +84,15 @@ class McpClient:
     command: str
     register: str
     add: Callable[[str], str]
+    names: tuple[str, ...] = (SERVER,)
 
 
 CLAUDE_CODE = McpClient(
     "Claude Code",
     "claude",
-    f"`claude mcp add --scope user --transport stdio {SERVER} -- {RELAY}`",
+    f"`claude mcp add --scope user --transport stdio {SERVER} -- {RELAY}`, or install the plugin as the README shows",
     _claude_add,
+    (SERVER, PLUGIN_SERVER),
 )
 CODEX = McpClient(
     "Codex", "codex", f"add [mcp_servers.{SERVER}] to ~/.codex/config.toml, as the README shows", _codex_add
@@ -100,6 +104,12 @@ CLIENTS = (CLAUDE_CODE, CODEX)
 class Registration:
     found: bool
     status: str | None = None
+    name: str = SERVER
+
+    @property
+    def alias(self) -> str:
+        """ " as <name>" when the client knows repolore under another name, such as the plugin's."""
+        return "" if self.name == SERVER else f" as {self.name}"
 
     @property
     def healthy(self) -> bool:
@@ -110,18 +120,29 @@ class Registration:
 
 
 def registration(client: McpClient) -> Registration | None:
-    """How the client has repolore registered, or None when its CLI isn't on PATH.
+    """How the client has repolore registered, under the first of its names it knows, or None when its CLI isn't on
+    PATH. Not found under any, it carries what the client said about the first name.
 
     Claude Code starts the server to check it, which can take a while.
     """
     executable = shutil.which(client.command)
     if executable is None:
         return None
-    result = _run([executable, "mcp", "get", SERVER], GET_SECONDS)
+    missing: list[Registration] = []
+    for name in client.names:
+        found = _lookup(executable, name)
+        if found.found:
+            return found
+        missing.append(found)
+    return missing[0]
+
+
+def _lookup(executable: str, name: str) -> Registration:
+    result = _run([executable, "mcp", "get", name], GET_SECONDS)
     if result.returncode != 0:
-        return Registration(found=False, status=_first_line(result))
+        return Registration(found=False, status=_first_line(result), name=name)
     status, issue = _field(result.stdout, "Status"), _field(result.stdout, "Issue")
-    return Registration(found=True, status=f"{status} ({issue})" if status and issue else status)
+    return Registration(found=True, status=f"{status} ({issue})" if status and issue else status, name=name)
 
 
 def register(client: McpClient) -> str:

@@ -11,7 +11,7 @@ from conftest import FakeEmbedder
 
 from repolore import __version__, doctor
 from repolore.chunking import Chunk
-from repolore.clients import CODEX, Registration
+from repolore.clients import CLAUDE_CODE, CODEX, PLUGIN_SERVER, Registration
 from repolore.doctor import (
     Check,
     config_check,
@@ -420,6 +420,14 @@ def test_a_healthy_registration_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     registered_as(monkeypatch, Registration(found=True, status="✓ Connected"))
 
     assert registration_check(CODEX) == Check("Codex", True, "repolore is registered: ✓ Connected")
+
+
+def test_a_registration_by_the_plugin_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    registered_as(monkeypatch, Registration(found=True, status="✓ Connected", name=PLUGIN_SERVER))
+
+    assert registration_check(CLAUDE_CODE) == Check(
+        "Claude Code", True, "repolore is registered as plugin:repolore:repolore: ✓ Connected"
+    )
 
 
 def test_a_client_that_isnt_installed_is_not_checked(monkeypatch: pytest.MonkeyPatch) -> None:

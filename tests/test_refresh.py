@@ -16,8 +16,10 @@ from repolore.refresh import (
     REPLACE_ATTEMPTS,
     REQUEST_FILE,
     STARTUP_SECONDS,
+    STATUS_FILE,
     RefreshRunning,
     RefreshStatus,
+    refresh_due,
     refresh_status,
     refreshing,
     start_refresh,
@@ -297,3 +299,55 @@ def test_a_status_being_replaced_reads_as_no_status(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(Path, "read_text", being_replaced)
 
     assert refresh_status(tmp_path) == RefreshStatus()
+
+
+def built_index(data_dir: Path) -> Path:
+    index_file = data_dir / "db" / "default.db"
+    index_file.parent.mkdir(parents=True)
+    index_file.touch()
+    return index_file
+
+
+def last_refresh(data_dir: Path, ago: timedelta, ok: bool = True) -> None:
+    started = (datetime.now(UTC) - ago).isoformat(timespec="seconds")
+    status = RefreshStatus(started_at=started, finished_at=started, ok=ok)
+    (data_dir / STATUS_FILE).write_text(status.model_dump_json(), encoding="utf-8")
+
+
+def test_an_index_refreshed_longer_ago_than_the_interval_is_due(tmp_path: Path) -> None:
+    index_file = built_index(tmp_path)
+    last_refresh(tmp_path, timedelta(hours=13))
+
+    assert refresh_due(tmp_path, index_file, hours=12)
+
+
+def test_no_refresh_is_due_before_the_first_build(tmp_path: Path) -> None:
+    assert not refresh_due(tmp_path, tmp_path / "db" / "default.db", hours=12)
+
+
+def test_an_interval_of_zero_never_refreshes(tmp_path: Path) -> None:
+    index_file = built_index(tmp_path)
+    last_refresh(tmp_path, timedelta(days=30))
+
+    assert not refresh_due(tmp_path, index_file, hours=0)
+
+
+def test_an_index_no_refresh_has_run_on_is_due(tmp_path: Path) -> None:
+    assert refresh_due(tmp_path, built_index(tmp_path), hours=12)
+
+
+@pytest.mark.parametrize(
+    ("ago", "due"), [(timedelta(hours=2, seconds=1), True), (timedelta(hours=2, minutes=-1), False)]
+)
+def test_a_refresh_is_due_once_the_interval_has_passed(tmp_path: Path, ago: timedelta, due: bool) -> None:
+    index_file = built_index(tmp_path)
+    last_refresh(tmp_path, ago)
+
+    assert refresh_due(tmp_path, index_file, hours=2) is due
+
+
+def test_a_failed_refresh_also_waits_for_the_interval(tmp_path: Path) -> None:
+    index_file = built_index(tmp_path)
+    last_refresh(tmp_path, timedelta(minutes=5), ok=False)
+
+    assert not refresh_due(tmp_path, index_file, hours=0.5)

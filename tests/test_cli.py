@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeEmbedder, SharedServer
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from repolore import __version__, cli, relay, shared_server
 from repolore.chunking import Chunk
-from repolore.cli import MISS_HITS, app
-from repolore.clients import McpClient, Registration, RegistrationError
+from repolore.cli import MISS_HITS, PLUGIN_REFRESH_HOURS, app
+from repolore.clients import PLUGIN_SERVER, McpClient, Registration, RegistrationError
 from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
@@ -927,6 +927,109 @@ def test_refresh_refuses_while_another_runs(cached_crashcause: Path) -> None:
     assert "A refresh is already running." in result.output
 
 
+@dataclass
+class SessionStart:
+    data_dir: Path
+    started: list[tuple[Path, str]] = field(default_factory=list)
+
+    def invoke(self, *args: str) -> Result:
+        return runner.invoke(app, ["--data-dir", str(self.data_dir), "session-start", *args])
+
+
+@pytest.fixture
+def session_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionStart:
+    (tmp_path / "db").mkdir()
+    (tmp_path / "db" / "default.db").touch()
+    run = SessionStart(tmp_path)
+
+    def start_refresh(data_dir: Path, db: str) -> bool:
+        run.started.append((data_dir, db))
+        return True
+
+    monkeypatch.setattr(cli, "start_refresh", start_refresh)
+    monkeypatch.delenv(PLUGIN_REFRESH_HOURS, raising=False)
+    return run
+
+
+def test_session_start_refreshes_a_due_index_in_the_background_silently(session_start: SessionStart) -> None:
+    result = session_start.invoke()
+
+    assert (result.exit_code, result.output) == (0, "")
+    assert session_start.started == [(session_start.data_dir, "default")]
+
+
+def test_session_start_leaves_a_recently_refreshed_index_alone(session_start: SessionStart) -> None:
+    with refreshing(session_start.data_dir):
+        pass
+
+    result = session_start.invoke()
+
+    assert (result.exit_code, result.output) == (0, "")
+    assert session_start.started == []
+
+
+def test_session_start_does_nothing_before_the_first_build(session_start: SessionStart) -> None:
+    (session_start.data_dir / "db" / "default.db").unlink()
+
+    result = session_start.invoke()
+
+    assert (result.exit_code, result.output) == (0, "")
+    assert session_start.started == []
+
+
+def test_session_start_takes_the_interval_from_the_plugin_option(
+    session_start: SessionStart, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(PLUGIN_REFRESH_HOURS, "0")
+
+    assert session_start.invoke().exit_code == 0
+    assert session_start.started == []
+
+
+def test_session_start_prefers_hours_given_over_the_plugin_option(
+    session_start: SessionStart, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(PLUGIN_REFRESH_HOURS, "0")
+
+    assert session_start.invoke("--hours", "1").exit_code == 0
+    assert session_start.started == [(session_start.data_dir, "default")]
+
+
+def test_session_start_rejects_a_plugin_option_that_isnt_a_number(
+    session_start: SessionStart, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(PLUGIN_REFRESH_HOURS, "soon")
+
+    result = session_start.invoke()
+
+    assert result.exit_code == 2
+    assert session_start.started == []
+
+
+def test_session_start_is_quiet_when_a_refresh_is_already_running(
+    session_start: SessionStart, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "start_refresh", lambda _, __: False)
+
+    result = session_start.invoke()
+
+    assert (result.exit_code, result.output) == (0, "")
+
+
+def test_session_start_fails_when_the_refresh_cant_start(
+    session_start: SessionStart, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def cant_start(_: Path, __: str) -> bool:
+        raise OSError("can't start python")
+
+    monkeypatch.setattr(cli, "start_refresh", cant_start)
+
+    result = session_start.invoke()
+
+    assert result.exit_code == 1
+    assert "can't start python" in result.output
+
+
 def test_server_status_without_a_server(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "status"])
 
@@ -1208,6 +1311,20 @@ def test_setup_leaves_registered_clients_alone(tmp_path: Path, monkeypatch: pyte
         "Codex: repolore is already registered (✗ Failed to connect); `repolore doctor` says how to fix it."
         in result.output
     )
+
+
+def test_setup_names_the_plugin_when_it_registered_repolore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    found: dict[str, Registration | None] = {
+        "Claude Code": Registration(found=True, status="✓ Connected", name=PLUGIN_SERVER),
+        "Codex": None,
+    }
+    run = setup_run(tmp_path, monkeypatch, found=found)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert run.registered == []
+    assert "Claude Code: repolore is already registered as plugin:repolore:repolore (✓ Connected)." in result.output
 
 
 @pytest.mark.parametrize(

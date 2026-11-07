@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "repolore": {
+      "command": "repolore-mcp"
+    }
+  }
+}
