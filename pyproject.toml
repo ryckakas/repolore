@@ -53,7 +53,7 @@ repolore-mcp = "repolore.relay:main"
 
 [build-system]
 # uv_build only takes a literal version; hatch-vcs derives it from the nearest vX.Y.Z tag and the commits since.
-requires = ["hatchling>=1.32.4,<2", "hatch-vcs>=0.5.0,<0.6"]
+requires = ["hatchling>=1.33.0,<2", "hatch-vcs>=0.5.0,<0.6"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
