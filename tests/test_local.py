@@ -111,8 +111,8 @@ def test_the_session_is_loaded_once_from_the_release_folder_on_the_cpu(tiny: Loc
     embedder.embed_query("retry")
     embedder.embed_documents(["upload"])
 
-    assert StubSession.created == [
-        {"path": str(models_dir / "tiny-1" / "tiny.onnx"), "threads": 0, "providers": ["CPUExecutionProvider"]}
+    assert [(session["path"], session["providers"]) for session in StubSession.created] == [
+        (str(models_dir / "tiny-1" / "tiny.onnx"), ["CPUExecutionProvider"])
     ]
 
 

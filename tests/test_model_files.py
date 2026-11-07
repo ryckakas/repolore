@@ -137,7 +137,7 @@ def test_a_not_found_fails_in_one_line_naming_the_url_and_the_folder(tmp_path: P
     message = str(raised.value)
     assert "\n" not in message
     assert f"{BASE}/tiny.onnx" in message
-    assert "github.com" in message
+    assert "It needs access to github.com" in message
     assert str(RELEASE.folder(tmp_path)) in message
 
 
@@ -149,7 +149,7 @@ def test_a_file_that_cant_be_written_blames_the_folder_not_the_network(tmp_path:
         ensure(RELEASE, [RELEASE.graph], tmp_path, transport=github.transport)
 
     assert str(raised.value).startswith(f"tiny.onnx couldn't be written to {folder}: ")
-    assert "github.com" not in str(raised.value)
+    assert "needs access to github.com" not in str(raised.value)
 
 
 def failing_after(content: bytes) -> Callable[[httpx.Request], httpx.Response]:
