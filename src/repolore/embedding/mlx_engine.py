@@ -1,6 +1,8 @@
 import json
+from collections.abc import Generator
+from contextlib import contextmanager
 from importlib.resources import files
-from math import prod
+from math import ceil, prod
 from pathlib import Path
 from typing import Any
 
@@ -27,18 +29,13 @@ class MlxEngine:
         self._dim = dim
 
     def embed(self, ids: list[list[int]]) -> Vectors:
-        longest = -(-max(len(text) for text in ids) // ALIGN) * ALIGN
-        tokens = mx.array([text + [0] * (longest - len(text)) for text in ids])
-        keep = mx.array([[True] * len(text) + [False] * (longest - len(text)) for text in ids])
-        mask = None if all(len(text) == longest for text in ids) else keep[:, None, None, :]
-        try:
+        padded = ceil(max(len(text) for text in ids) / ALIGN) * ALIGN
+        tokens = mx.array([text + [0] * (padded - len(text)) for text in ids])
+        keep = mx.array([[True] * len(text) + [False] * (padded - len(text)) for text in ids])
+        mask = None if all(len(text) == padded for text in ids) else keep[:, None, None, :]
+        with _on_the_gpu():
             # Converting to numpy evaluates the lazy graph here, once per batch.
             return np.array(pool(self._token_vectors(tokens, mask), keep, self._dim), dtype=np.float32)
-        except RuntimeError as error:
-            reason = next(iter(str(error).strip().splitlines()), type(error).__name__).rstrip(".")
-            raise ModelUnavailableError(
-                f"MLX failed on the GPU: {reason}. Set REPOLORE_DEVICE=cpu to build on the CPU instead."
-            ) from error
 
     def _token_vectors(self, ids: mx.array, mask: mx.array | None) -> mx.array:
         hidden = self._weights["model.embed_tokens.weight"][ids]
@@ -96,7 +93,21 @@ def _unit(vectors: mx.array) -> mx.array:
 
 
 def mlx_engine(spec: LocalModel, folder: Path) -> MlxEngine:
-    return MlxEngine(load_weights(folder / spec.release.weights.name, manifest()), spec.architecture, spec.dim)
+    with _on_the_gpu():
+        weights = load_weights(folder / spec.release.weights.name, manifest())
+    return MlxEngine(weights, spec.architecture, spec.dim)
+
+
+@contextmanager
+def _on_the_gpu() -> Generator[None]:
+    """Turns an MLX failure, such as a Metal timeout or an allocation that doesn't fit, into one line and a way out."""
+    try:
+        yield
+    except RuntimeError as error:
+        reason = next(iter(str(error).strip().splitlines()), type(error).__name__).rstrip(".")
+        raise ModelUnavailableError(
+            f"MLX failed on the GPU: {reason}. Set REPOLORE_DEVICE=cpu to build on the CPU instead."
+        ) from error
 
 
 def manifest() -> dict[str, Any]:

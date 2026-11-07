@@ -246,6 +246,18 @@ def test_the_engine_reads_the_release_through_the_manifest(
     assert vector == pytest.approx(reference_vector(weights, text(6)), abs=1e-5)
 
 
+def test_weights_that_dont_fit_the_gpu_stop_with_the_same_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def out_of_memory(*_: object) -> mlx_engine.Weights:
+        raise RuntimeError("[metal::malloc] Attempting to allocate 1385807872 bytes which is greater than the maximum")
+
+    monkeypatch.setattr(mlx_engine, "load_weights", out_of_memory)
+
+    with pytest.raises(ModelUnavailableError, match=r"^MLX failed on the GPU: \[metal::malloc\] .*REPOLORE_DEVICE=cpu"):
+        mlx_engine.mlx_engine(VOYAGE_NANO, tmp_path)
+
+
 def expected_names(architecture: Architecture) -> set[str]:
     per_layer = [
         "input_layernorm",

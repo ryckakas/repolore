@@ -206,7 +206,7 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   itself and forwards `tools/list` and `tools/call` to one shared server per data dir and index, through an MCP client
   over Streamable HTTP, a new connection per call. It starts that server when none runs, replaces one of another
   version, retries a call once if the server went away, and asks the session to reconnect in `/mcp` when repolore
-  was upgraded under it. It imports only the MCP SDK and the small state modules, never onnxruntime, numpy or
+  was upgraded under it. It imports only the MCP SDK and the small state modules, never onnxruntime, mlx, numpy or
   sqlite-vec: about 70 MB per session instead of the model's 870 MB. `--standalone` serves the tools from the relay
   process itself, model included, as before.
 - `shared_server.py` is `repolore server run`: the tools over Streamable HTTP from our own `uvicorn.Server` on
