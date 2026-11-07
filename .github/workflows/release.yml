@@ -127,7 +127,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A rerun of a failed publish finds the release already there.
+          # A rerun of this job, or a release made by hand, finds it already there.
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "$GITHUB_REF_NAME already has a GitHub Release"
             exit 0

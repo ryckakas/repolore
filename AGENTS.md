@@ -180,7 +180,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   nothing to embed; `inspect` fetches the tokenizer alone. `search`, `eval` and the MCP server never download: without
   the files they raise `ModelUnavailableError`, which the CLI prints as one line and the MCP tool returns as its error.
 - `reranking.py` is the only code that needs PyTorch, through the `rerank` extra: sentence-transformers, with torch from
-  PyTorch's CPU index (`[tool.uv.sources]`; PyPI's Linux wheel bundles gigabytes of CUDA). Its model loads from the
+  PyTorch's CPU index (`[tool.uv.sources]` in a checkout, `--torch-backend cpu` in the install hint; PyPI's Linux
+  wheel bundles gigabytes of CUDA). Its model loads from the
   Hugging Face cache and goes to the Hub only to download a pinned revision that isn't cached yet; `hub.py` turns a
   failed download into a `ModelUnavailableError`. Without the extra, `--rerank` says how to install it.
 - `store.py` writes one SQLite file per index: `chunks`, a sqlite-vec `vec0` table filtered by repo,

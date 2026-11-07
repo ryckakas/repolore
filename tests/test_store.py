@@ -225,8 +225,10 @@ def test_python_without_sqlite_extensions_gets_a_clear_error(tmp_path: Path, mon
     connection = NoExtensions()
     monkeypatch.setattr(sqlite3, "connect", lambda *_, **__: connection)
 
-    with pytest.raises(StoreError, match="can't load extensions"):
+    with pytest.raises(StoreError, match="can't load extensions") as raised:
         connect(tmp_path / "index.db")
+
+    assert "uv tool install --managed-python --python 3.12 --reinstall repolore-mcp" in str(raised.value)
 
     assert connection.closed
 
