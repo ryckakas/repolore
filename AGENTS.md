@@ -23,7 +23,8 @@ is needed: embeddings run locally. There is no hosted service and no GitHub App.
 Python 3.12 (pinned in `.python-version`), managed with uv, which always uses its own Python build
 (`python-preference = "only-managed"`): some system builds, such as python.org's on macOS, can't load the
 sqlite-vec extension. A tool install doesn't read the project's `[tool.uv]` settings, so the README's
-install command passes `--managed-python` itself; `[tool.uv.sources]` does apply, so it still gets the CPU torch.
+install command passes `--managed-python` itself; `[tool.uv.sources]` does apply, so the `rerank` extra still gets
+the CPU torch.
 Code that opens files always passes
 `encoding="utf-8"`, because the Windows default cp1252 codec breaks on GitHub content. Don't lean on
 `PYTHONUTF8=1` instead: installed users won't have it set, and CI's Windows job runs without it.
@@ -37,8 +38,8 @@ uv run repolore ingest      # fetch what changed in them into the raw cache; --f
 uv run repolore inspect     # chunk the cached documents: counts, token histogram, random samples
 uv run repolore build       # embed what changed and write the index (<data-dir>/db/default.db; --db names another,
                             # --max-tokens splits long sections (0: the default, 8192 or a smaller window),
-                            # --embedder picks the model, --bot-reviews/--no-bot-reviews keeps or drops review
-                            # threads started by bots; a left-out option keeps the index's last value)
+                            # --bot-reviews/--no-bot-reviews keeps or drops review threads started by bots;
+                            # a left-out option keeps the index's last value)
 uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
@@ -50,10 +51,11 @@ uv run repolore eval        # score retrieval on the eval questions; --mode, --r
                             # --holdout
 uv run ruff format          # format
 uv run ruff check           # lint
+uv sync --extra rerank      # instead of plain uv sync, so pyright sees sentence-transformers' types
 uv run pyright              # type-check (standard mode)
 uv run bonsai-lint          # cognitive complexity, threshold in bonsai-lint.toml
 uv run pytest               # offline tests; `live` tests are deselected
-uv run pytest -m live       # tests that call real GitHub / Voyage APIs, run by hand
+uv run pytest -m live       # tests that call real GitHub or download the model, run by hand
 uv run pytest --cov         # tests with the coverage floor CI enforces (90%, branch coverage)
 uv audit --locked --preview-features audit-command   # known advisories in uv.lock
 ```
@@ -138,18 +140,29 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   is split between blocks, and a block over the limit by lines: fence pieces reopen and close the fence, table
   pieces repeat the header row, and a single line that long is cut by characters. Each document's sections are
   counted in one call, and only those over the limit are counted block by block.
-- `embedding/` has the `Embedder` protocol and `LocalEmbedder` over sentence-transformers in float32. `build` embeds
-  on the Apple Silicon GPU (MPS) when there is one, or on the device `REPOLORE_DEVICE` names; everything else, the
-  MCP server's queries included, runs on the CPU. Both devices give the same vectors, so the embedding cache is shared.
-  The default model is `voyage-4-nano` (1024 dimensions, pinned to a reviewed revision because it runs the
-  model's own code); `bge-small` is the smaller alternative. An index records its model, and `embedder_for` picks
-  the matching one for search. The embedding and reranking models load from the Hugging Face cache and go to the
-  Hub only to download a pinned revision that isn't cached yet. If that download fails, `hub.py` turns the error
-  into a `ModelUnavailableError` that names the model and revision, which the CLI prints as one line and the MCP
-  tool returns as its error; huggingface_hub's own retries still take a minute or two first. `count_tokens` reads
-  only the model's `tokenizer.json` (no weights), and `build_index` uses it to batch by padded tokens, since a batch
-  is padded to its longest text. torch comes from PyTorch's CPU index (`[tool.uv.sources]`); PyPI's Linux wheel
-  bundles gigabytes of CUDA.
+- `embedding/` has the `Embedder` protocol and `LocalEmbedder`, which owns the tokenizers, prompts and truncation and
+  hands token ids to an engine. `OnnxEngine` runs `voyage-4-nano` (1024 dimensions, float32) on ONNX Runtime's CPU
+  kernels, with mean pooling and normalization in numpy. It gives each text its own run: every attention layer is a
+  `MultiHeadAttention` node, whose CPU kernel is flash attention only without a padding mask, so the graph has none and
+  a padded batch would give wrong vectors. That keeps memory linear in a text's length. Every platform builds on the
+  CPU for now; Apple Silicon's GPU comes back through MLX in #89. `model_id` still names the Hugging Face revision the
+  graph was exported from, because the vectors match that revision's to float rounding, so the embedding cache and
+  existing indexes stay valid. An index records its model, and `embedder_for` refuses any other, which needs a rebuild.
+  `count_tokens` reads only `tokenizer.json` (no weights), and `build_index` uses it to batch by padded tokens, since
+  an engine may pad a batch to its longest text.
+- `embedding/model_files.py` fetches the graph, weights and tokenizer from an immutable release of
+  [repolore-models](https://github.com/ryckakas/repolore-models), pinned by size and sha256, into
+  `<data-dir>/models/<release>/`. A new export is a new release and a new folder, so a file in use is never replaced. A
+  file gets its final name only once its hash matches, so its size is enough to tell it's there. An interrupted
+  download resumes with a `Range` request, and an OS lock keeps two processes off the same `.partial`. There are no
+  retries: a failure is one line, and the next run resumes. The client is its own `httpx.Client`, because the release
+  is public and the GitHub token must not travel. **Only `build` and `refresh` download**, all three files, even with
+  nothing to embed; `inspect` fetches the tokenizer alone. `search`, `eval` and the MCP server never download: without
+  the files they raise `ModelUnavailableError`, which the CLI prints as one line and the MCP tool returns as its error.
+- `reranking.py` is the only code that needs PyTorch, through the `rerank` extra: sentence-transformers, with torch from
+  PyTorch's CPU index (`[tool.uv.sources]`; PyPI's Linux wheel bundles gigabytes of CUDA). Its model loads from the
+  Hugging Face cache and goes to the Hub only to download a pinned revision that isn't cached yet; `hub.py` turns a
+  failed download into a `ModelUnavailableError`. Without the extra, `--rerank` says how to install it.
 - `store.py` writes one SQLite file per index: `chunks`, a sqlite-vec `vec0` table filtered by repo,
   kind and author inside the KNN query, and an FTS5 table. An index is in WAL mode and rewritten in one transaction,
   so a search during a build reads the previous index until it commits; with a rollback journal, readers are locked
@@ -169,8 +182,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   latency is measured at a given corpus size. `EXPERIMENTS.md` logs every retrieval experiment, aggregate numbers only.
 - `mcp_server.py` defines the `search`, `read`, `list_repos` and `refresh` tools (official `mcp` SDK v2 with
   `MCPServer`; the v1 `FastMCP` import no longer exists). It opens the index read-only per call, so `repolore build`
-  can rewrite it meanwhile. Its server loads the index's model on a background thread at start (about 35 s warm here,
-  mostly importing transformers), so the first search finds it ready or waits on `LocalEmbedder`'s load lock.
+  can rewrite it meanwhile. Its server loads the index's model on a background thread at start (about 7 s warm here),
+  so the first search finds it ready or waits on `LocalEmbedder`'s load lock.
   `search` cuts each passage at 1,500 characters; `read` returns a source's chunks in document order with their
   headers, about 12,000 characters per call (or one passage, when that is longer), so one long PR can't flood the
   context. Not every client shows the server's instructions, so `search`'s description says what is searched and why
@@ -180,9 +193,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   itself and forwards `tools/list` and `tools/call` to one shared server per data dir and index, through an MCP client
   over Streamable HTTP, a new connection per call. It starts that server when none runs, replaces one of another
   version, retries a call once if the server went away, and asks the session to reconnect in `/mcp` when repolore
-  was upgraded under it. It imports only the MCP SDK and the small state modules, never torch, numpy or sqlite-vec:
-  about 70 MB per session instead of the model's 1.8 GB. `--standalone` serves the tools from the relay process
-  itself, model included, as before.
+  was upgraded under it. It imports only the MCP SDK and the small state modules, never onnxruntime, numpy or
+  sqlite-vec: about 70 MB per session instead of the model's 870 MB. `--standalone` serves the tools from the relay
+  process itself, model included, as before.
 - `shared_server.py` is `repolore server run`: the tools over Streamable HTTP from our own `uvicorn.Server` on
   127.0.0.1, port 0. It holds `server-<db>.lock` for its life, writes its port and a bearer token new at every start to
   `server-<db>.json` (readable by the user only), and needs that token on every request; the SDK checks Host and
@@ -200,8 +213,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
   whatever the creation flags, so a short-lived intermediate starts the real process and exits before
   `spawn_detached` returns.
-- `doctor.py` is `repolore doctor`: sqlite-vec, GitHub access, `repolore.toml`, the index, its model in the Hugging
-  Face cache, the last refresh, the shared server and the MCP clients' registrations. The GitHub check is its one
+- `doctor.py` is `repolore doctor`: sqlite-vec, GitHub access, `repolore.toml`, the index, its model files (by size,
+  not hash), the last refresh, the shared server and the MCP clients' registrations. The GitHub check is its one
   request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
   never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` asks
   each MCP client CLI on PATH (`claude`, `codex`) with `mcp get repolore`; Claude Code starts the server to check it.

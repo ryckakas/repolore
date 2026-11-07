@@ -1,25 +1,27 @@
 import os
+import platform
+import sys
 import threading
-from collections.abc import Callable, Sequence
-from contextlib import suppress
-from dataclasses import dataclass, field
-from enum import StrEnum
-from functools import cache, partial
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import cache
 from itertools import batched
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 import numpy as np
 
-from repolore.embedding import Vectors
-from repolore.hub import downloading
+from repolore.embedding import ModelUnavailableError, Vectors
+from repolore.embedding.model_files import ModelFile, ModelRelease, ensure, missing
+from repolore.progress import Report, ignore
 
 if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
+    from onnxruntime import InferenceSession
     from tokenizers import Tokenizer
 
 COUNT_BATCH = 1024
-DEVICE_ENV = "REPOLORE_DEVICE"
 PROMPT_MARGIN = 16
+SMALLEST_NORM = 1e-12
 
 
 @dataclass(frozen=True)
@@ -28,8 +30,9 @@ class LocalModel:
     revision: str
     dim: int
     max_seq_length: int
-    trust_remote_code: bool = False
-    prompts: dict[str, str] = field(default_factory=dict)
+    document_prompt: str
+    query_prompt: str
+    release: ModelRelease
 
     @property
     def model_id(self) -> str:
@@ -37,57 +40,94 @@ class LocalModel:
 
     @property
     def max_tokens(self) -> int:
-        # Room for the document prompt (7 tokens for voyage-4-nano) and special tokens (2 for bge-small).
+        # Room for the document prompt, 7 tokens.
         return self.max_seq_length - PROMPT_MARGIN
 
 
 VOYAGE_NANO = LocalModel(
     name="voyageai/voyage-4-nano",
-    # The model runs its own code (trust_remote_code), so it is pinned to a reviewed commit.
+    # The revision the release was exported from. Its vectors match that revision's to float rounding, so an embedding
+    # cache and an index built from it stay valid under the same id.
     revision="5fb34e870f49f19e79c94d5e118f5ee730133279",
     dim=1024,
     max_seq_length=32_768,
-    trust_remote_code=True,
+    document_prompt="Represent the document for retrieval: ",
+    query_prompt="Represent the query for retrieving supporting documents: ",
+    release=ModelRelease(
+        name="voyage-4-nano-1",
+        url="https://github.com/ryckakas/repolore-models/releases/download/voyage-4-nano-1",
+        graph=ModelFile(
+            "voyage-4-nano.onnx", 1_135_877, "e2df8004432a30bec197d9e498c8d3d136029af8e4e67ea634a47cfc108ed2e5"
+        ),
+        weights=ModelFile(
+            "voyage-4-nano.onnx.data", 1_385_807_872, "a76ace9892d55dbfb96609e022a60fe1ebf15b542e7283942de6d2403e1b5191"
+        ),
+        tokenizer=ModelFile(
+            "tokenizer.json", 7_031_645, "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+        ),
+    ),
 )
-BGE_SMALL = LocalModel(
-    name="BAAI/bge-small-en-v1.5",
-    revision="5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
-    dim=384,
-    max_seq_length=512,
-    # The model card's query instruction; the checkpoint doesn't ship it as a saved prompt.
-    prompts={"query": "Represent this sentence for searching relevant passages: "},
-)
-
-
-class ModelName(StrEnum):
-    VOYAGE_NANO = "voyage-4-nano"
-    BGE_SMALL = "bge-small"
-
-
-MODELS = {ModelName.VOYAGE_NANO: VOYAGE_NANO, ModelName.BGE_SMALL: BGE_SMALL}
-
-
-def model_named_in(model_id: str) -> ModelName | None:
-    """The model a recorded id names, whichever revision it was pinned to then."""
-    return next((name for name, spec in MODELS.items() if model_id.startswith(f"{spec.name}@")), None)
 
 
 class UnknownModelError(Exception):
     pass
 
 
+class Engine(Protocol):
+    def embed(self, ids: list[list[int]]) -> Vectors:
+        """Normalized vectors for texts already tokenized, prompt included."""
+        ...
+
+
+class OnnxEngine:
+    """The exported graph on ONNX Runtime's CPU kernels."""
+
+    def __init__(self, graph_file: Path, dim: int) -> None:
+        # Imported on first use: most commands never embed anything.
+        import onnxruntime
+
+        options = onnxruntime.SessionOptions()
+        if sys.platform == "darwin" and platform.machine() == "arm64":
+            # ONNX Runtime's default thread count is about 20% slower on Apple Silicon.
+            options.intra_op_num_threads = os.cpu_count() or 0
+        self._session: InferenceSession = onnxruntime.InferenceSession(
+            str(graph_file), options, providers=["CPUExecutionProvider"]
+        )
+        self._dim = dim
+
+    def embed(self, ids: list[list[int]]) -> Vectors:
+        # One text per run: flash attention needs a graph with no padding mask, so padding would change vectors.
+        return np.stack([self._embed_one(text) for text in ids])
+
+    def _embed_one(self, ids: list[int]) -> Vectors:
+        tokens = np.array([ids], dtype=np.int64)
+        outputs = self._session.run(None, {"input_ids": tokens, "attention_mask": np.ones_like(tokens)})
+        return pool(np.asarray(outputs[0], dtype=np.float32)[0], self._dim)
+
+
+def pool(token_vectors: Vectors, dim: int) -> Vectors:
+    """Mean over the tokens, normalized, cut to the model's dimensions and normalized again."""
+    return _unit(_unit(token_vectors.mean(axis=0))[:dim])
+
+
+def _unit(vector: Vectors) -> Vectors:
+    return vector / max(float(np.linalg.norm(vector)), SMALLEST_NORM)
+
+
+class _Tokenizers(NamedTuple):
+    counting: "Tokenizer"
+    truncating: "Tokenizer"
+
+
 class LocalEmbedder:
-    """A sentence-transformers model. The default, voyage-4-nano, shares Voyage's hosted embedding space.
+    """A model run on this machine: tokenizers, prompts and truncation here, the forward pass in its engine."""
 
-    It runs on the CPU. With use_gpu, it runs on the device REPOLORE_DEVICE names, or else on the Apple Silicon GPU
-    when there is one.
-    """
-
-    def __init__(self, model: LocalModel = VOYAGE_NANO, *, use_gpu: bool = False) -> None:
+    def __init__(self, model: LocalModel, models_dir: Path) -> None:
         self._spec = model
-        self._use_gpu = use_gpu
-        self._model: SentenceTransformer | None = None
-        self._tokenizer: Tokenizer | None = None
+        self._models_dir = models_dir
+        self._folder = model.release.folder(models_dir)
+        self._engine: Engine | None = None
+        self._tokenizers: _Tokenizers | None = None
         self._loading = threading.Lock()
 
     @property
@@ -102,16 +142,22 @@ class LocalEmbedder:
     def max_tokens(self) -> int:
         return self._spec.max_tokens
 
+    def download(self, report: Report = ignore) -> None:
+        release = self._spec.release
+        ensure(release, release.files, self._models_dir, report)
+
+    def download_tokenizer(self) -> None:
+        release = self._spec.release
+        ensure(release, [release.tokenizer], self._models_dir)
+
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
-        batch = list(texts)
-        vectors = self._loaded().encode_document(
-            batch, batch_size=max(len(batch), 1), normalize_embeddings=True, show_progress_bar=False
-        )
-        return np.asarray(vectors, dtype=np.float32)
+        if not texts:
+            return np.empty((0, self.dim), dtype=np.float32)
+        return self._embedded([self._spec.document_prompt + text for text in texts])
 
     def count_tokens(self, texts: Sequence[str]) -> list[int]:
-        """Tokens of each text before truncation, without the document prompt or special tokens."""
-        tokenizer = self._tokenizer_loaded()
+        """Tokens of each text before truncation, without the document prompt."""
+        tokenizer = self._tokenizers_loaded().counting
         # An encoding keeps ids, offsets and masks (about 100 bytes a token), so a whole corpus at once costs GBs.
         return [
             len(encoding.ids)
@@ -120,95 +166,63 @@ class LocalEmbedder:
         ]
 
     def embed_query(self, text: str) -> Vectors:
-        return np.asarray(
-            self._loaded().encode_query(text, normalize_embeddings=True, show_progress_bar=False), dtype=np.float32
-        )
+        return self._embedded([self._spec.query_prompt + text])[0]
 
     def warm_up(self) -> None:
-        self._loaded()
+        self._engine_loaded()
+        self._tokenizers_loaded()
 
-    def _loaded(self) -> "SentenceTransformer":
+    def _embedded(self, texts: list[str]) -> Vectors:
+        encodings = self._tokenizers_loaded().truncating.encode_batch(texts, add_special_tokens=False)
+        return self._engine_loaded().embed([encoding.ids for encoding in encodings])
+
+    def _engine_loaded(self) -> Engine:
         # The MCP server runs tool calls on worker threads; parallel first searches must not load the model twice.
         with self._loading:
-            return self._load_once()
+            if self._engine is None:
+                release = self._spec.release
+                self._require(release.files)
+                self._engine = OnnxEngine(self._folder / release.graph.name, self._spec.dim)
+            return self._engine
 
-    def _tokenizer_loaded(self) -> "Tokenizer":
+    def _tokenizers_loaded(self) -> _Tokenizers:
         with self._loading:
-            if self._tokenizer is None:
-                from tokenizers import Tokenizer
+            if self._tokenizers is None:
+                tokenizer = self._spec.release.tokenizer
+                self._require([tokenizer])
+                self._tokenizers = _load_tokenizers(self._folder / tokenizer.name, self._spec.max_seq_length)
+            return self._tokenizers
 
-                tokenizer = Tokenizer.from_file(_tokenizer_file(self._spec))
-                # Some tokenizer.json files carry the model's padding or truncation, which would distort counts.
-                tokenizer.no_padding()
-                tokenizer.no_truncation()
-                self._tokenizer = tokenizer
-            return self._tokenizer
-
-    def _load_once(self) -> "SentenceTransformer":
-        if self._model is None:
-            # Imported on first use: loading torch takes seconds, and most commands never embed anything.
-            import torch
-            from sentence_transformers import SentenceTransformer
-
-            spec = self._spec
-            # BF16 checkpoints run about 9x slower than float32 on CPUs without native BF16 math.
-            load = partial(
-                SentenceTransformer,
-                spec.name,
-                revision=spec.revision,
-                trust_remote_code=spec.trust_remote_code,
-                truncate_dim=spec.dim,
-                prompts=spec.prompts or None,
-                device=_gpu_or_cpu() if self._use_gpu else "cpu",
-                model_kwargs={"dtype": torch.float32},
-            )
-            self._model = _from_cache_or_hub(spec, load)
-        return self._model
+    def _require(self, files: Sequence[ModelFile]) -> None:
+        if missing(self._folder, files):
+            raise ModelUnavailableError(f"{self._spec.name} isn't downloaded: run `repolore refresh`.")
 
 
-def _gpu_or_cpu() -> str:
-    import torch
+def _load_tokenizers(tokenizer_file: Path, max_length: int) -> _Tokenizers:
+    from tokenizers import Tokenizer
 
-    return os.environ.get(DEVICE_ENV) or ("mps" if torch.backends.mps.is_available() else "cpu")
-
-
-def is_cached(spec: LocalModel) -> bool:
-    """Whether the model's pinned revision is in the Hugging Face cache, checked without the network."""
-    from huggingface_hub import try_to_load_from_cache
-
-    # A cache without modules.json would quietly load as a mean-pooling model instead of failing, so it doesn't count;
-    # the weights download last, so a first download that was cut off has none.
-    files = ("modules.json", "model.safetensors")
-    return all(isinstance(try_to_load_from_cache(spec.name, name, revision=spec.revision), str) for name in files)
+    # Two instances, because worker threads share them and a tokenizer's truncation can't change per call.
+    counting, truncating = (Tokenizer.from_file(str(tokenizer_file)) for _ in range(2))
+    for tokenizer in (counting, truncating):
+        # Some tokenizer.json files carry the model's padding or truncation, which would distort counts.
+        tokenizer.no_padding()
+        tokenizer.no_truncation()
+    truncating.enable_truncation(max_length=max_length)
+    return _Tokenizers(counting, truncating)
 
 
-def _from_cache_or_hub(spec: LocalModel, load: Callable[..., "SentenceTransformer"]) -> "SentenceTransformer":
-    # A pinned revision never changes, so a cached copy is current and asking the Hub only costs requests.
-    if is_cached(spec):
-        with suppress(OSError):
-            return load(local_files_only=True)
-    with downloading(spec.name, spec.revision):
-        return load()
-
-
-def _tokenizer_file(spec: LocalModel) -> str:
-    from huggingface_hub import hf_hub_download, try_to_load_from_cache
-
-    cached = try_to_load_from_cache(spec.name, "tokenizer.json", revision=spec.revision)
-    if isinstance(cached, str):
-        return cached
-    with downloading(spec.name, spec.revision):
-        return hf_hub_download(spec.name, "tokenizer.json", revision=spec.revision)
+def is_downloaded(spec: LocalModel, models_dir: Path) -> bool:
+    return not missing(spec.release.folder(models_dir), spec.release.files)
 
 
 def spec_for(model_id: str) -> LocalModel | None:
     """The model an index records, if repolore can load that revision."""
-    return next((spec for spec in MODELS.values() if spec.model_id == model_id), None)
+    return VOYAGE_NANO if model_id == VOYAGE_NANO.model_id else None
 
 
 @cache
-def embedder_for(model_id: str) -> LocalEmbedder:
+def embedder_for(model_id: str, models_dir: Path) -> LocalEmbedder:
     """The embedder an index was built with, so queries land in its vector space; one per model, loaded once."""
     if spec := spec_for(model_id):
-        return LocalEmbedder(spec)
+        return LocalEmbedder(spec, models_dir)
     raise UnknownModelError(f"The index was built with {model_id}, which repolore can't load; rebuild it.")

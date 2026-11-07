@@ -4,6 +4,7 @@ from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
+from repolore.embedding import ModelUnavailableError
 from repolore.hub import downloading
 from repolore.store import Hit
 
@@ -14,6 +15,10 @@ MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 # Query plus passage, in model tokens: longer passages are cut, which keeps 50 candidates to a couple of seconds.
 MAX_LENGTH = 256
+MISSING_EXTRA = (
+    "Reranking needs PyTorch, which the rerank extra installs: uv tool install --managed-python --python 3.12 "
+    '"repolore[rerank] @ git+https://github.com/ryckakas/repolore"'
+)
 
 
 class Reranker(Protocol):
@@ -37,7 +42,10 @@ class CrossEncoderReranker:
     def _loaded(self) -> "CrossEncoder":
         with self._loading:
             if self._model is None:
-                from sentence_transformers import CrossEncoder
+                try:
+                    from sentence_transformers import CrossEncoder
+                except ImportError as error:
+                    raise ModelUnavailableError(MISSING_EXTRA) from error
 
                 load = partial(CrossEncoder, MODEL, revision=REVISION, max_length=MAX_LENGTH, device="cpu")
                 # A pinned revision never changes, so a cached copy is current and asking the Hub only costs requests.

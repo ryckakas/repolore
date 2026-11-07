@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -14,21 +15,22 @@ from conftest import FakeEmbedder, SharedServer
 from typer.testing import CliRunner
 
 from repolore import __version__, cli, relay, shared_server
+from repolore.chunking import Chunk
 from repolore.cli import MISS_HITS, app
 from repolore.clients import McpClient, Registration, RegistrationError
 from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
 from repolore.documents import Document
-from repolore.embedding.local import BGE_SMALL, LocalModel
-from repolore.hub import ModelUnavailableError
+from repolore.embedding import ModelUnavailableError
+from repolore.embedding.local import VOYAGE_NANO, LocalModel
 from repolore.locks import hold
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report
 from repolore.refresh import refresh_status, refreshing
 from repolore.server_state import ServerFiles, registered
 from repolore.sources.github import GitHubClient, GitHubError, TokenInfo
-from repolore.store import Hit, connect, index_settings
+from repolore.store import Hit, connect, index_settings, write_index
 
 runner = CliRunner()
 EXAMPLE_FILE = Path(__file__).parent.parent / "evals" / "questions.example.yaml"
@@ -283,7 +285,7 @@ def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch:
     lines = [line.split() for line in result.output.splitlines()]
     assert lines[0] == ["7", "documents,", "22", "chunks"]
     assert lines[1:7] == [["pr", "3"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["plan", "0"]]
-    assert lines[7] == ["tokens", "(voyage-4-nano)"]
+    assert lines[7] == ["tokens"]
     buckets = ["1-50", "51-100", "101-200", "201-400", "401-800", "801-2048", "2049-8192", ">8192"]
     assert [line[0] for line in lines[8:16]] == buckets
     assert sum(int(line[1]) for line in lines[8:16]) == 22
@@ -315,7 +317,7 @@ def cached_crashcause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data_dir = ingest_setup(tmp_path, monkeypatch)
     shutil.copytree(FIXTURES / "crashcause", data_dir / "raw" / "ryckakas" / "crashcause")
     monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_, **__: FakeEmbedder())
-    monkeypatch.setattr("repolore.cli.embedder_for", lambda _: FakeEmbedder())
+    monkeypatch.setattr("repolore.cli.embedder_for", lambda *_: FakeEmbedder())
     return data_dir
 
 
@@ -422,7 +424,7 @@ def test_search_with_a_model_it_cant_get_says_so_in_one_line(
     assert result.output == f"{UNAVAILABLE}\n"
 
 
-@pytest.mark.parametrize("step", ["count_tokens", "embed_documents"])
+@pytest.mark.parametrize("step", ["download", "count_tokens", "embed_documents"])
 def test_build_with_a_model_it_cant_get_says_so_in_one_line(
     cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch, step: str
 ) -> None:
@@ -435,10 +437,11 @@ def test_build_with_a_model_it_cant_get_says_so_in_one_line(
     assert "Traceback" not in result.output
 
 
+@pytest.mark.parametrize("step", ["download_tokenizer", "count_tokens"])
 def test_inspect_with_a_tokenizer_it_cant_get_says_so_in_one_line(
-    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch, step: str
 ) -> None:
-    monkeypatch.setattr(FakeEmbedder, "count_tokens", model_unavailable)
+    monkeypatch.setattr(FakeEmbedder, step, model_unavailable)
 
     result = runner.invoke(app, ["inspect"])
 
@@ -627,7 +630,7 @@ def test_rebuild_without_options_keeps_the_recorded_settings(cached_crashcause: 
     result = runner.invoke(app, ["build", "--db", "kept"])
 
     assert result.exit_code == 0
-    assert "Building with sections split at 50 tokens, bot reviews included, voyage-4-nano." in result.output
+    assert "Building with sections split at 50 tokens, bot reviews included." in result.output
     assert "Warning: build settings changed" not in result.output
     assert "0 embedded" in result.output
     with closing(connect(cached_crashcause / "db" / "kept.db")) as db:
@@ -649,10 +652,7 @@ def test_first_build_uses_the_defaults(cached_crashcause: Path) -> None:
     result = runner.invoke(app, ["build", "--db", "fresh"])
 
     assert result.exit_code == 0
-    assert (
-        "Building with sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano."
-        in result.output
-    )
+    assert "Building with sections split at 8192 tokens (the default), bot reviews excluded." in result.output
 
 
 def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -> None:
@@ -662,30 +662,81 @@ def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -
     result = runner.invoke(app, ["build", "--db", "empty"])
 
     assert result.exit_code == 0
-    assert (
-        "Building with sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano."
-        in result.output
-    )
+    assert "Building with sections split at 8192 tokens (the default), bot reviews excluded." in result.output
 
 
-def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    loaded: list[tuple[LocalModel, bool]] = []
+def test_every_build_ensures_the_model_even_with_nothing_to_embed(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = FakeEmbedder()
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_: embedder)
 
-    def local_embedder(model: LocalModel, *, use_gpu: bool = False) -> FakeEmbedder:
-        loaded.append((model, use_gpu))
-        embedder = FakeEmbedder()
-        embedder.model_id = model.model_id
-        embedder.max_tokens = model.max_tokens
-        return embedder
+    runner.invoke(app, ["build"])
+    embedded = len(embedder.embedded)
+    result = runner.invoke(app, ["build"])
+
+    assert "0 embedded" in result.output
+    assert len(embedder.embedded) == embedded
+    assert embedder.downloads == 2
+
+
+def test_inspect_fetches_only_the_tokenizer(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    embedder = FakeEmbedder()
+    monkeypatch.setattr("repolore.cli.LocalEmbedder", lambda *_: embedder)
+
+    runner.invoke(app, ["inspect"])
+
+    assert (embedder.tokenizer_downloads, embedder.downloads) == (1, 0)
+
+
+def test_build_and_inspect_keep_the_model_under_the_data_dir(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folders: list[Path] = []
+
+    def local_embedder(_: LocalModel, models_dir: Path) -> FakeEmbedder:
+        folders.append(models_dir)
+        return FakeEmbedder()
 
     monkeypatch.setattr("repolore.cli.LocalEmbedder", local_embedder)
-    runner.invoke(app, ["build", "--db", "small-model", "--embedder", "bge-small"])
 
-    result = runner.invoke(app, ["build", "--db", "small-model"])
+    runner.invoke(app, ["build"])
+    runner.invoke(app, ["inspect"])
 
-    assert loaded == [(BGE_SMALL, True), (BGE_SMALL, True)]
-    assert "Building with sections split at 496 tokens (the default), bot reviews excluded, bge-small." in result.output
-    assert "Warning: build settings changed" not in result.output
+    assert folders == [cached_crashcause.resolve() / "models"] * 2
+
+
+def test_search_looks_for_the_model_under_the_data_dir(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folders: list[Path] = []
+
+    def embedder(_: str, models_dir: Path) -> FakeEmbedder:
+        folders.append(models_dir)
+        return FakeEmbedder()
+
+    runner.invoke(app, ["build"])
+    monkeypatch.setattr("repolore.cli.embedder_for", embedder)
+
+    runner.invoke(app, ["search", "anything"])
+
+    assert folders == [cached_crashcause.resolve() / "models"]
+
+
+def test_search_without_the_model_says_to_refresh_and_downloads_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corpus: list[Chunk]
+) -> None:
+    data_dir = ingest_setup(tmp_path, monkeypatch)
+    monkeypatch.setattr("repolore.embedding.local.ensure", lambda *_: pytest.fail("a search must not download"))
+    fake = FakeEmbedder()
+    with closing(connect(data_dir / "db" / "default.db")) as db:
+        vectors = fake.embed_documents([chunk.embedded_text for chunk in corpus])
+        write_index(db, corpus, vectors, VOYAGE_NANO.model_id, fake.dim)
+
+    result = runner.invoke(app, ["search", "anything"])
+
+    assert result.exit_code == 1
+    assert result.output == "voyageai/voyage-4-nano isn't downloaded: run `repolore refresh`.\n"
 
 
 def test_build_without_cached_documents_leaves_no_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -781,10 +832,29 @@ def test_refresh_ingests_then_rebuilds_with_the_recorded_settings(
     assert result.exit_code == 0
     assert fetched == [False]
     assert seen == [Progress(phase=Phase.DISCOVER), Progress(phase=Phase.INGEST, done=1, total=2)]
-    assert "Building with sections split at 50 tokens, bot reviews excluded, voyage-4-nano." in result.output
+    assert "Building with sections split at 50 tokens, bot reviews excluded." in result.output
     assert "0 embedded" in result.output
     status = refresh_status(cached_crashcause)
     assert (status.running, status.ok, status.error, status.progress) == (False, True, None, None)
+
+
+def test_a_refresh_shows_the_model_download_in_its_status(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    online(monkeypatch)
+    monkeypatch.setattr("repolore.cli.ingest_repos", lambda *_: [])
+    seen: list[Progress | None] = []
+
+    def download(_: FakeEmbedder, report: Report) -> None:
+        report(Progress(phase=Phase.DOWNLOAD, done=100, total=1321))
+        seen.append(refresh_status(cached_crashcause).progress)
+
+    monkeypatch.setattr(FakeEmbedder, "download", download)
+
+    result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 0
+    assert seen == [Progress(phase=Phase.DOWNLOAD, done=100, total=1321)]
 
 
 def test_refresh_reports_every_phase(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -893,10 +963,10 @@ def test_server_stop_that_is_ignored_names_the_log(tmp_path: Path, monkeypatch: 
 def test_server_run_serves_the_named_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, serving: bool, exit_code: int
 ) -> None:
-    runs: list[tuple[Path, str, float]] = []
+    runs: list[tuple[Path, str, float, Path]] = []
 
-    def run_shared(paths: AppPaths, db: str, idle_minutes: float, _: object) -> bool:
-        runs.append((paths.data_dir, db, idle_minutes))
+    def run_shared(paths: AppPaths, db: str, idle_minutes: float, embedder_for: partial[object]) -> bool:
+        runs.append((paths.data_dir, db, idle_minutes, embedder_for.keywords["models_dir"]))
         return serving
 
     monkeypatch.setattr(shared_server, "run_shared", run_shared)
@@ -904,7 +974,7 @@ def test_server_run_serves_the_named_index(
     result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "run", "--db", "x", "--idle-minutes", "2"])
 
     assert result.exit_code == exit_code
-    assert runs == [(tmp_path.resolve(), "x", 2.0)]
+    assert runs == [(tmp_path.resolve(), "x", 2.0, tmp_path.resolve() / "models")]
     assert ("already running" in result.output) is not serving
 
 

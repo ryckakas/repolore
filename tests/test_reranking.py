@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 import pytest
 
 from repolore import reranking
-from repolore.hub import ModelUnavailableError
+from repolore.embedding import ModelUnavailableError
 from repolore.reranking import CrossEncoderReranker
 from repolore.store import Hit
 
@@ -32,6 +32,16 @@ def stub_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
     StubCrossEncoder.cached = True
     StubCrossEncoder.hub_reachable = True
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(CrossEncoder=StubCrossEncoder))
+
+
+def test_without_the_extra_it_says_how_to_install_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    with pytest.raises(ModelUnavailableError) as raised:
+        CrossEncoderReranker().rerank("q", [hit("a")])
+
+    assert "\n" not in str(raised.value)
+    assert "repolore[rerank]" in str(raised.value)
 
 
 def hit(text: str) -> Hit:

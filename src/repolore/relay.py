@@ -22,7 +22,6 @@ from repolore import __version__
 from repolore.instructions import INSTRUCTIONS
 from repolore.paths import resolve_paths
 from repolore.processes import SAFE_PATH, spawn_detached
-from repolore.refresh import QUIET
 from repolore.server_state import Discovery, ServerFiles, is_running, read_discovery, registered, request_stop
 
 log = logging.getLogger(__name__)
@@ -45,7 +44,7 @@ def start_server(files: ServerFiles) -> None:
     command = [sys.executable, *SAFE_PATH, "-m", "repolore", "--data-dir", str(files.data_dir), "server", "run"]
     # Appended to, so a second server started in the same moment, which exits at once, can't cut the first one's log.
     with files.log.open("a", encoding="utf-8") as server_log:
-        spawn_detached([*command, "--db", files.db], stdout=server_log, env=os.environ | QUIET, cwd=files.data_dir)
+        spawn_detached([*command, "--db", files.db], stdout=server_log, env=os.environ, cwd=files.data_dir)
 
 
 def installed_version() -> str:

@@ -22,6 +22,10 @@ class AppPaths:
     def embedding_cache(self) -> Path:
         return self.data_dir / "cache" / "embeddings.db"
 
+    @property
+    def models_dir(self) -> Path:
+        return self.data_dir / "models"
+
     def index_file(self, name: str) -> Path:
         return self.data_dir / "db" / f"{name}.db"
 

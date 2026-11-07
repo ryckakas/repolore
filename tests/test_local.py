@@ -1,320 +1,322 @@
+import json
+import os
 import sys
-import types
-from dataclasses import dataclass, field
+import threading
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
+import onnxruntime
 import pytest
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 
-from repolore.embedding import local
-from repolore.embedding.local import LocalEmbedder, UnknownModelError, embedder_for
-from repolore.hub import ModelUnavailableError
+from repolore.embedding import ModelUnavailableError, local
+from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, LocalModel, UnknownModelError, embedder_for, pool
+from repolore.embedding.model_files import ModelFile, ModelRelease
+from repolore.paths import resolve_paths
+
+FIXTURES = Path(__file__).parent / "fixtures"
+VOCABULARY = {"[UNK]": 0, "retry": 1, "upload": 2, "doc": 3, "query": 4}
+TOKEN_DIM = 6
 
 
-class StubModel:
-    loads: ClassVar[list[dict[str, Any]]] = []
-    encodes: ClassVar[list[dict[str, Any]]] = []
-    cache_lookups: ClassVar[list[tuple[str, str, str]]] = []
-    modules_json_cached: ClassVar[bool] = True
-    safetensors_cached: ClassVar[bool] = True
-    weights_cached: ClassVar[bool] = True
-    hub_reachable: ClassVar[bool] = True
+class StubSession:
+    created: ClassVar[list[dict[str, Any]]] = []
+    runs: ClassVar[list[dict[str, Any]]] = []
+    load_seconds: ClassVar[float] = 0
 
-    def __init__(self, name: str, **kwargs: Any) -> None:
-        StubModel.loads.append({"name": name, **kwargs})
-        if kwargs.get("local_files_only") and not StubModel.weights_cached:
-            raise OSError("couldn't find them in the cached files")
-        if not kwargs.get("local_files_only") and not StubModel.hub_reachable:
-            raise OSError("We couldn't connect to 'https://huggingface.co' to load the files")
+    def __init__(self, path: str, options: onnxruntime.SessionOptions, providers: list[str]) -> None:
+        time.sleep(StubSession.load_seconds)
+        StubSession.created.append({"path": path, "threads": options.intra_op_num_threads, "providers": providers})
 
-    @staticmethod
-    def try_to_load_from_cache(repo_id: str, filename: str, revision: str) -> str | None:
-        StubModel.cache_lookups.append((repo_id, filename, revision))
-        cached = StubModel.modules_json_cached if filename == "modules.json" else StubModel.safetensors_cached
-        return f"/hf/{repo_id}/{revision}/{filename}" if cached else None
+    def run(self, _: None, feeds: dict[str, Any]) -> list[Any]:
+        StubSession.runs.append(feeds)
+        ids = feeds["input_ids"][0]
+        return [np.array([[[token + 1, 1, 1, 1, 9, 9] for token in ids]], dtype=np.float64)]
 
-    def encode_document(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
-        StubModel.encodes.append(kwargs)
-        return [[1.0, 0.0]] * len(texts)
 
-    def encode_query(self, text: str, **kwargs: Any) -> list[float]:
-        assert kwargs == {"normalize_embeddings": True, "show_progress_bar": False}
-        return [0.0, 1.0]
+@pytest.fixture(autouse=True)
+def stub_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    StubSession.created = []
+    StubSession.runs = []
+    StubSession.load_seconds = 0
+    monkeypatch.setattr(onnxruntime, "InferenceSession", StubSession)
 
 
 @pytest.fixture
-def stub_sentence_transformers(monkeypatch: pytest.MonkeyPatch) -> None:
-    StubModel.loads = []
-    StubModel.encodes = []
-    StubModel.cache_lookups = []
-    StubModel.modules_json_cached = True
-    StubModel.safetensors_cached = True
-    StubModel.weights_cached = True
-    StubModel.hub_reachable = True
-    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=StubModel))
-    hub = types.SimpleNamespace(try_to_load_from_cache=StubModel.try_to_load_from_cache)
-    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_model_is_loaded_once_pinned_and_in_float32() -> None:
-    import torch
-
-    embedder = LocalEmbedder()
-
-    embedder.embed_query("a")
-    embedder.embed_documents(["b", "c"])
-
-    assert StubModel.loads == [
-        {
-            "name": "voyageai/voyage-4-nano",
-            "revision": local.VOYAGE_NANO.revision,
-            "trust_remote_code": True,
-            "truncate_dim": 1024,
-            "prompts": None,
-            "device": "cpu",
-            "model_kwargs": {"dtype": torch.float32},
-            "local_files_only": True,
-        }
-    ]
-    assert StubModel.cache_lookups == [
-        ("voyageai/voyage-4-nano", "modules.json", local.VOYAGE_NANO.revision),
-        ("voyageai/voyage-4-nano", "model.safetensors", local.VOYAGE_NANO.revision),
-    ]
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_warm_up_loads_the_model_a_search_then_reuses() -> None:
-    embedder = LocalEmbedder()
-
-    embedder.warm_up()
-    assert len(StubModel.loads) == 1
-    embedder.embed_query("a")
-
-    assert len(StubModel.loads) == 1
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-@pytest.mark.parametrize(
-    ("use_gpu", "mps", "override", "device"),
-    [
-        (True, True, None, "mps"),
-        (True, False, None, "cpu"),
-        (True, True, "cpu", "cpu"),
-        (True, True, "", "mps"),
-        (True, False, "mps", "mps"),
-        (False, True, None, "cpu"),
-        (False, True, "mps", "cpu"),
-    ],
-)
-def test_the_gpu_is_used_only_when_asked_for_and_available(
-    monkeypatch: pytest.MonkeyPatch, use_gpu: bool, mps: bool, override: str | None, device: str
-) -> None:
-    import torch
-
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: mps)
-    if override is None:
-        monkeypatch.delenv(local.DEVICE_ENV, raising=False)
-    else:
-        monkeypatch.setenv(local.DEVICE_ENV, override)
-
-    LocalEmbedder(use_gpu=use_gpu).embed_documents(["a"])
-
-    [only] = StubModel.loads
-    assert only["device"] == device
-    assert only["model_kwargs"] == {"dtype": torch.float32}
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_a_snapshot_without_modules_json_is_loaded_from_the_hub() -> None:
-    StubModel.modules_json_cached = False
-
-    assert LocalEmbedder().embed_query("a").tolist() == [0.0, 1.0]
-
-    [only] = StubModel.loads
-    assert "local_files_only" not in only
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_a_snapshot_missing_other_files_is_downloaded() -> None:
-    StubModel.weights_cached = False
-    embedder = LocalEmbedder()
-
-    assert embedder.embed_query("a").tolist() == [0.0, 1.0]
-    embedder.embed_query("b")
-
-    first, second = StubModel.loads
-    assert first["local_files_only"] is True
-    assert "local_files_only" not in second
-    assert {**second, "local_files_only": True} == first
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_a_model_neither_cached_nor_downloadable_says_how_to_get_it() -> None:
-    StubModel.weights_cached = False
-    StubModel.hub_reachable = False
-
-    with pytest.raises(ModelUnavailableError, match=r"voyageai/voyage-4-nano \(revision 5fb34e870f49\) isn't in the"):
-        LocalEmbedder().embed_query("a")
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_vectors_are_float32_arrays() -> None:
-    embedder = LocalEmbedder()
-
-    documents = embedder.embed_documents(["b", "c"])
-    query = embedder.embed_query("a")
-
-    assert documents.dtype == np.float32
-    assert documents.shape == (2, 2)
-    assert query.tolist() == [0.0, 1.0]
-    assert StubModel.encodes == [{"batch_size": 2, "normalize_embeddings": True, "show_progress_bar": False}]
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_model_id_names_the_pinned_revision() -> None:
-    assert LocalEmbedder().model_id == f"voyageai/voyage-4-nano@{local.VOYAGE_NANO.revision[:12]}"
-    assert LocalEmbedder().dim == 1024
-
-
-@pytest.mark.live
-def test_real_model_embeds_unit_vectors() -> None:
-    embedder = LocalEmbedder()
-
-    assert float(np.linalg.norm(embedder.embed_query("why was the release delayed?"))) == pytest.approx(1.0)
-
-
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_bge_small_gets_its_query_instruction_and_no_remote_code() -> None:
-    LocalEmbedder(local.BGE_SMALL).embed_query("a")
-
-    load = StubModel.loads[0]
-    assert load["name"] == "BAAI/bge-small-en-v1.5"
-    assert load["trust_remote_code"] is False
-    assert load["truncate_dim"] == 384
-    assert load["prompts"] == {"query": "Represent this sentence for searching relevant passages: "}
-
-
-def test_embedder_for_matches_the_index_model_and_reuses_it() -> None:
-    embedder = embedder_for(local.BGE_SMALL.model_id)
-
-    assert embedder.model_id == "BAAI/bge-small-en-v1.5@5c38ec7c405e"
-    assert embedder.dim == 384
-    assert embedder_for(local.BGE_SMALL.model_id) is embedder
-
-
-def test_embedder_for_an_unknown_model_says_to_rebuild() -> None:
-    with pytest.raises(UnknownModelError, match="rebuild it"):
-        embedder_for("someone/else@123")
-
-
-def test_a_recorded_model_is_named_whichever_revision_it_was_pinned_to() -> None:
-    assert local.model_named_in(local.BGE_SMALL.model_id) == local.ModelName.BGE_SMALL
-    assert local.model_named_in("voyageai/voyage-4-nano@000000000000") == local.ModelName.VOYAGE_NANO
-    assert local.model_named_in("voyageai/voyage-4-nano-v2@000000000000") is None
-    assert local.model_named_in("") is None
-
-
-@dataclass
-class TinyHub:
-    tokenizer_file: Path
-    cached: bool = True
-    reachable: bool = True
-    lookups: list[tuple[str, str, str]] = field(default_factory=list)
-    downloads: list[tuple[str, str, str]] = field(default_factory=list)
-
-    def try_to_load_from_cache(self, repo_id: str, filename: str, revision: str) -> str | None:
-        self.lookups.append((repo_id, filename, revision))
-        return str(self.tokenizer_file) if self.cached else None
-
-    def hf_hub_download(self, repo_id: str, filename: str, revision: str) -> str:
-        self.downloads.append((repo_id, filename, revision))
-        if not self.reachable:
-            raise OSError("An error happened while trying to locate the file on the Hub")
-        return str(self.tokenizer_file)
+def models_dir(tmp_path: Path) -> Path:
+    return tmp_path / "models"
 
 
 @pytest.fixture
-def tiny_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TinyHub:
-    tokenizer = Tokenizer(WordLevel({"[UNK]": 0, "retry": 1, "upload": 2}, unk_token="[UNK]"))
+def tiny(models_dir: Path) -> LocalModel:
+    """A word-level model whose files are on disk; its saved truncation must not reach the counts."""
+    folder = models_dir / "tiny-1"
+    folder.mkdir(parents=True)
+    tokenizer = Tokenizer(WordLevel(VOCABULARY, unk_token="[UNK]"))
     tokenizer.pre_tokenizer = Whitespace()
     tokenizer.enable_truncation(max_length=2)
-    tokenizer.save(str(tmp_path / "tokenizer.json"))
-    hub = TinyHub(tmp_path / "tokenizer.json")
-    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
-    return hub
+    tokenizer.save(str(folder / "tokenizer.json"))
+    (folder / "tiny.onnx").write_bytes(b"graph")
+    (folder / "tiny.onnx.data").write_bytes(b"weights")
+    return replace(
+        VOYAGE_NANO,
+        dim=4,
+        document_prompt="doc ",
+        query_prompt="query ",
+        release=ModelRelease(
+            "tiny-1",
+            "https://example.invalid/tiny-1",
+            ModelFile("tiny.onnx", 5, "unchecked"),
+            ModelFile("tiny.onnx.data", 7, "unchecked"),
+            ModelFile("tokenizer.json", (folder / "tokenizer.json").stat().st_size, "unchecked"),
+        ),
+    )
 
 
-def test_tokens_are_counted_with_the_cached_tokenizer_and_without_its_truncation(tiny_hub: TinyHub) -> None:
-    embedder = LocalEmbedder()
+def test_each_document_runs_alone_with_the_document_prompt(tiny: LocalModel, models_dir: Path) -> None:
+    vectors = LocalEmbedder(tiny, models_dir).embed_documents(["retry", "upload retry"])
 
-    assert embedder.count_tokens(["retry the upload again", "", "retry"]) == [4, 0, 1]
-    assert embedder.count_tokens(["upload"]) == [1]
-    assert tiny_hub.lookups == [("voyageai/voyage-4-nano", "tokenizer.json", local.VOYAGE_NANO.revision)]
-    assert tiny_hub.downloads == []
-
-
-def test_a_tokenizer_not_in_the_cache_is_downloaded_at_the_pinned_revision(tiny_hub: TinyHub) -> None:
-    tiny_hub.cached = False
-
-    assert LocalEmbedder(local.BGE_SMALL).count_tokens(["retry upload"]) == [2]
-    assert tiny_hub.downloads == [("BAAI/bge-small-en-v1.5", "tokenizer.json", local.BGE_SMALL.revision)]
+    assert [run["input_ids"].tolist() for run in StubSession.runs] == [[[3, 1]], [[3, 2, 1]]]
+    assert [run["attention_mask"].tolist() for run in StubSession.runs] == [[[1, 1]], [[1, 1, 1]]]
+    assert StubSession.runs[0]["input_ids"].dtype == np.int64
+    assert vectors.shape == (2, 4)
+    assert vectors.dtype == np.float32
+    assert np.linalg.norm(vectors, axis=1) == pytest.approx([1.0, 1.0])
 
 
-def test_a_tokenizer_neither_cached_nor_downloadable_says_how_to_get_it(tiny_hub: TinyHub) -> None:
-    tiny_hub.cached = False
-    tiny_hub.reachable = False
+def test_a_query_gets_the_query_prompt_and_one_vector(tiny: LocalModel, models_dir: Path) -> None:
+    vector = LocalEmbedder(tiny, models_dir).embed_query("retry")
 
-    with pytest.raises(ModelUnavailableError, match=r"BAAI/bge-small-en-v1\.5 .* locate the file on the Hub\. Run"):
-        LocalEmbedder(local.BGE_SMALL).count_tokens(["retry"])
-
-
-def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(local, "COUNT_BATCH", 2)
-
-    assert LocalEmbedder().count_tokens(["retry", "retry upload", "a b c", "", "upload"]) == [1, 2, 3, 0, 1]
+    assert StubSession.runs[0]["input_ids"].tolist() == [[4, 1]]
+    assert vector.shape == (4,)
+    assert float(np.linalg.norm(vector)) == pytest.approx(1.0)
 
 
-def test_the_window_leaves_room_for_the_prompt() -> None:
-    assert LocalEmbedder().max_tokens == 32_768 - local.PROMPT_MARGIN
-    assert LocalEmbedder(local.BGE_SMALL).max_tokens == 512 - local.PROMPT_MARGIN
+def test_no_documents_need_no_model(tmp_path: Path) -> None:
+    vectors = LocalEmbedder(VOYAGE_NANO, tmp_path).embed_documents([])
+
+    assert vectors.shape == (0, 1024)
+    assert vectors.dtype == np.float32
+    assert StubSession.created == []
 
 
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_a_model_is_cached_when_its_pinned_modules_json_and_weights_are() -> None:
-    assert local.is_cached(local.BGE_SMALL)
-    assert StubModel.cache_lookups == [
-        ("BAAI/bge-small-en-v1.5", "modules.json", local.BGE_SMALL.revision),
-        ("BAAI/bge-small-en-v1.5", "model.safetensors", local.BGE_SMALL.revision),
+def test_the_session_is_loaded_once_from_the_release_folder_on_the_cpu(tiny: LocalModel, models_dir: Path) -> None:
+    embedder = LocalEmbedder(tiny, models_dir)
+
+    embedder.embed_query("retry")
+    embedder.embed_documents(["upload"])
+
+    assert [(session["path"], session["providers"]) for session in StubSession.created] == [
+        (str(models_dir / "tiny-1" / "tiny.onnx"), ["CPUExecutionProvider"])
     ]
 
 
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_a_model_whose_weights_never_finished_downloading_is_not_cached() -> None:
-    StubModel.safetensors_cached = False
+def test_warm_up_loads_what_a_search_then_reuses(tiny: LocalModel, models_dir: Path) -> None:
+    embedder = LocalEmbedder(tiny, models_dir)
 
-    assert not local.is_cached(local.BGE_SMALL)
+    embedder.warm_up()
+    assert len(StubSession.created) == 1
+    embedder.embed_query("retry")
 
-    LocalEmbedder(local.BGE_SMALL).embed_query("a")
-    assert "local_files_only" not in StubModel.loads[0]
+    assert len(StubSession.created) == 1
 
 
-@pytest.mark.parametrize("spec", [local.VOYAGE_NANO, local.BGE_SMALL])
-def test_a_recorded_model_id_names_its_spec(spec: local.LocalModel) -> None:
-    assert local.spec_for(spec.model_id) is spec
+def test_parallel_first_searches_load_the_model_once(tiny: LocalModel, models_dir: Path) -> None:
+    StubSession.load_seconds = 0.1
+    embedder = LocalEmbedder(tiny, models_dir)
+
+    threads = [threading.Thread(target=embedder.embed_query, args=("retry",)) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+
+    assert len(StubSession.created) == 1
+    assert len(StubSession.runs) == 4
+
+
+@pytest.mark.parametrize(
+    ("system", "machine", "threads"),
+    [("darwin", "arm64", 10), ("darwin", "x86_64", 0), ("linux", "arm64", 0), ("win32", "AMD64", 0)],
+)
+def test_only_apple_silicon_sets_the_thread_count(
+    tiny: LocalModel, models_dir: Path, monkeypatch: pytest.MonkeyPatch, system: str, machine: str, threads: int
+) -> None:
+    monkeypatch.setattr(sys, "platform", system)
+    monkeypatch.setattr(local.platform, "machine", lambda: machine)
+    monkeypatch.setattr(os, "cpu_count", lambda: 10)
+
+    LocalEmbedder(tiny, models_dir).warm_up()
+
+    assert StubSession.created[0]["threads"] == threads
+
+
+def test_vectors_are_pooled_over_the_tokens_of_one_text(tiny: LocalModel, models_dir: Path) -> None:
+    [vector] = LocalEmbedder(tiny, models_dir).embed_documents(["retry"])
+
+    expected = np.array([(4 + 2) / 2, 1, 1, 1])
+    assert vector == pytest.approx(expected / np.linalg.norm(expected))
+
+
+def test_pooling_one_token_keeps_its_direction_at_the_cut() -> None:
+    assert pool(np.array([[3.0, 4.0, 100.0]], dtype=np.float32), 2) == pytest.approx([0.6, 0.8])
+
+
+def test_pooling_averages_the_tokens() -> None:
+    tokens = np.array([[2.0, 0.0, 7.0], [0.0, 2.0, 7.0]], dtype=np.float32)
+
+    assert pool(tokens, 2) == pytest.approx([2**-0.5, 2**-0.5])
+
+
+def test_pooling_a_zero_vector_stays_zero_rather_than_nan() -> None:
+    assert pool(np.zeros((1, 3), dtype=np.float32), 2).tolist() == [0.0, 0.0]
+
+
+@pytest.mark.parametrize(
+    ("text", "ids"),
+    [
+        ("retry upload", [3, 1, 2]),
+        ("retry upload retry", [3, 1, 2, 1]),
+        ("retry upload retry upload", [3, 1, 2, 1]),
+    ],
+)
+def test_a_document_is_cut_at_the_window_with_its_prompt_included(
+    tiny: LocalModel, models_dir: Path, text: str, ids: list[int]
+) -> None:
+    LocalEmbedder(replace(tiny, max_seq_length=4), models_dir).embed_documents([text])
+
+    assert StubSession.runs[0]["input_ids"].tolist() == [ids]
+
+
+def test_counts_ignore_the_window_and_any_saved_truncation(tiny: LocalModel, models_dir: Path) -> None:
+    embedder = LocalEmbedder(replace(tiny, max_seq_length=4), models_dir)
+
+    assert embedder.count_tokens(["retry the upload again now", "", "retry"]) == [5, 0, 1]
+
+
+def test_many_texts_are_counted_in_slices(tiny: LocalModel, models_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(local, "COUNT_BATCH", 2)
+
+    counts = LocalEmbedder(tiny, models_dir).count_tokens(["retry", "retry upload", "a b c", "", "upload"])
+
+    assert counts == [1, 2, 3, 0, 1]
+
+
+@pytest.mark.parametrize("name", ["tiny.onnx", "tiny.onnx.data", "tokenizer.json"])
+def test_a_search_without_the_files_fails_at_once_and_downloads_nothing(
+    tiny: LocalModel, models_dir: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setattr(local, "ensure", lambda *_: pytest.fail("a search must not download"))
+    (models_dir / "tiny-1" / name).unlink()
+
+    with pytest.raises(ModelUnavailableError, match=r"isn't downloaded: run `repolore refresh`\."):
+        LocalEmbedder(tiny, models_dir).embed_query("retry")
+
+    assert StubSession.created == []
+
+
+def test_counting_without_the_tokenizer_says_what_to_run(tiny: LocalModel, models_dir: Path) -> None:
+    (models_dir / "tiny-1" / "tokenizer.json").unlink()
+
+    with pytest.raises(ModelUnavailableError, match="isn't downloaded"):
+        LocalEmbedder(tiny, models_dir).count_tokens(["retry"])
+
+
+def test_an_embedder_finds_files_a_refresh_downloaded_after_its_first_failure(
+    tiny: LocalModel, models_dir: Path
+) -> None:
+    weights = models_dir / "tiny-1" / "tiny.onnx.data"
+    weights.unlink()
+    embedder = LocalEmbedder(tiny, models_dir)
+    with pytest.raises(ModelUnavailableError):
+        embedder.embed_query("retry")
+
+    weights.write_bytes(b"weights")
+
+    assert embedder.embed_query("retry").shape == (4,)
+
+
+def test_download_asks_for_every_file_and_passes_progress_on(
+    tiny: LocalModel, models_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(local, "ensure", lambda *args: calls.append(args))
+    report = print
+
+    LocalEmbedder(tiny, models_dir).download(report)
+
+    assert calls == [(tiny.release, tiny.release.files, models_dir, report)]
+
+
+def test_inspect_needs_only_the_tokenizer(tiny: LocalModel, models_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(local, "ensure", lambda *args: calls.append(args))
+
+    LocalEmbedder(tiny, models_dir).download_tokenizer()
+
+    assert calls == [(tiny.release, [tiny.release.tokenizer], models_dir)]
+
+
+def test_a_model_is_downloaded_when_every_file_is_there(tiny: LocalModel, models_dir: Path) -> None:
+    assert local.is_downloaded(tiny, models_dir)
+
+    (models_dir / "tiny-1" / "tiny.onnx").unlink()
+
+    assert not local.is_downloaded(tiny, models_dir)
+
+
+def test_model_id_names_the_pinned_revision(tmp_path: Path) -> None:
+    embedder = LocalEmbedder(VOYAGE_NANO, tmp_path)
+
+    assert embedder.model_id == f"voyageai/voyage-4-nano@{VOYAGE_NANO.revision[:12]}"
+    assert embedder.dim == 1024
+
+
+def test_the_window_leaves_room_for_the_prompt(tmp_path: Path) -> None:
+    assert LocalEmbedder(VOYAGE_NANO, tmp_path).max_tokens == 32_768 - local.PROMPT_MARGIN
+
+
+def test_embedder_for_matches_the_index_model_and_reuses_it(tmp_path: Path) -> None:
+    embedder = embedder_for(VOYAGE_NANO.model_id, tmp_path)
+
+    assert embedder.model_id == VOYAGE_NANO.model_id
+    assert embedder.dim == 1024
+    assert embedder_for(VOYAGE_NANO.model_id, tmp_path) is embedder
+
+
+@pytest.mark.parametrize("model_id", ["someone/else@123", "BAAI/bge-small-en-v1.5@5c38ec7c405e"])
+def test_embedder_for_an_unknown_model_says_to_rebuild(tmp_path: Path, model_id: str) -> None:
+    with pytest.raises(UnknownModelError, match="rebuild it"):
+        embedder_for(model_id, tmp_path)
+
+
+def test_a_recorded_model_id_names_its_spec() -> None:
+    assert local.spec_for(VOYAGE_NANO.model_id) is VOYAGE_NANO
 
 
 def test_a_model_id_of_another_revision_has_no_spec() -> None:
     assert local.spec_for("voyageai/voyage-4-nano@000000000000") is None
 
 
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_a_model_without_its_modules_json_is_not_cached() -> None:
-    StubModel.modules_json_cached = False
+@pytest.fixture
+def real_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.undo()
 
-    assert not local.is_cached(local.VOYAGE_NANO)
-    assert StubModel.loads == []
+
+@pytest.mark.live
+@pytest.mark.usefixtures("real_session")
+def test_the_release_gives_the_vectors_torch_gave() -> None:
+    reference = json.loads((FIXTURES / "voyage-4-nano-reference.json").read_text(encoding="utf-8"))
+    embedder = LocalEmbedder(VOYAGE_NANO, resolve_paths().models_dir)
+    embedder.download()
+
+    query = embedder.embed_query(reference["query"])
+    [document] = embedder.embed_documents([reference["document"]])
+
+    assert float(query @ np.array(reference["query_vector"])) >= 0.9999
+    assert float(document @ np.array(reference["document_vector"])) >= 0.9999

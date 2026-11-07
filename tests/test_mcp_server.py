@@ -1,4 +1,5 @@
 import subprocess
+import types
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import ANY
@@ -12,8 +13,8 @@ from mcp.types import CallToolResult, TextContent
 from repolore import __version__, mcp_server
 from repolore.chunking import Chunk, chunk_document
 from repolore.documents import Document
-from repolore.embedding.local import UnknownModelError
-from repolore.hub import ModelUnavailableError
+from repolore.embedding import Embedder, ModelUnavailableError
+from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, UnknownModelError
 from repolore.mcp_server import READ_CHARS, TEXT_CHARS, create_server, preload
 from repolore.paths import AppPaths
 from repolore.progress import Phase, Progress
@@ -28,7 +29,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def server(index_file: Path, embedder: FakeEmbedder) -> MCPServer:
+def server(index_file: Path, embedder: Embedder) -> MCPServer:
     data_dir = index_file.parent.parent
     paths = AppPaths(config_file=data_dir / "repolore.toml", questions_file=data_dir / "q.yaml", data_dir=data_dir)
     return create_server(paths, index_file.stem, lambda _: embedder)
@@ -215,6 +216,37 @@ async def test_index_from_another_model_is_refused(
     assert result.is_error
     assert isinstance(result.content[0], TextContent)
     assert "rebuild it" in result.content[0].text
+
+
+async def test_a_search_without_the_model_says_to_refresh_and_downloads_nothing(
+    tmp_path: Path, corpus: list[Chunk], fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("repolore.embedding.local.ensure", lambda *_: pytest.fail("a search must not download"))
+    path = tmp_path / "db" / "default.db"
+    with closing(connect(path)) as db:
+        vectors = fake_embedder.embed_documents([chunk.embedded_text for chunk in corpus])
+        write_index(db, corpus, vectors, VOYAGE_NANO.model_id, fake_embedder.dim)
+
+    async with Client(server(path, LocalEmbedder(VOYAGE_NANO, tmp_path / "models"))) as client:
+        result = await client.call_tool("search", {"query": "x"})
+
+    assert result.is_error
+    assert isinstance(result.content[0], TextContent)
+    assert result.content[0].text.endswith("voyageai/voyage-4-nano isn't downloaded: run `repolore refresh`.")
+
+
+def test_serve_looks_for_the_model_under_the_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaders = []
+
+    def create(_: AppPaths, __: str, embedder_for: object) -> types.SimpleNamespace:
+        loaders.append(embedder_for)
+        return types.SimpleNamespace(run=lambda: None)
+
+    monkeypatch.setattr(mcp_server, "create_server", create)
+
+    mcp_server.serve(tmp_path, "experiment", False)
+
+    assert [loader.keywords for loader in loaders] == [{"models_dir": tmp_path.resolve() / "models"}]
 
 
 async def test_a_model_it_cant_get_is_an_error_the_model_can_read(

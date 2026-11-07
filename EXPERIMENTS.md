@@ -265,3 +265,38 @@ release questions about bonsai-lint's CHANGELOG (a public repo), searched before
 
 Decision: keep the heading path. A CHANGELOG or version question is worth adding to the eval set to measure this
 case directly.
+
+## ONNX Runtime instead of PyTorch (2026-11-07)
+
+Hypothesis (#63): voyage-4-nano exported to ONNX and run on ONNX Runtime gives the same vectors as sentence-transformers
+on PyTorch, so the embedding cache and the model id can stay, while the install and the model load shrink. The export
+is release `voyage-4-nano-1` of ryckakas/repolore-models; each text runs alone, with no padding.
+
+Vectors, from a cold build of the same 3,713 distinct chunk texts with each engine:
+
+| Check | Result |
+|---|---|
+| ONNX Runtime against PyTorch, every vector | lowest cosine 1.00000000, largest absolute difference 2.7e-7 |
+
+| Tuning set (35) | recall@5 | recall@10 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| PyTorch index of 3,644 chunks, PyTorch queries | 0.857 | 0.911 | 0.814 | 0.805 |
+| The same index, ONNX Runtime queries | 0.857 | 0.911 | 0.814 | 0.805 |
+| PyTorch index of 3,732 chunks, PyTorch queries | 0.826 | 0.919 | 0.822 | 0.815 |
+| ONNX Runtime index of the same 3,732 chunks, ONNX Runtime queries | 0.826 | 0.919 | 0.822 | 0.815 |
+
+The top scores matched too (0.647 and 0.648 answerable, 0.480 unanswerable). The 3,732-chunk numbers are the ones
+the parent-headings change recorded above.
+
+On the 12-core Windows desktop:
+
+| | PyTorch | ONNX Runtime |
+|---|---|---|
+| Install | about 1.2 GB | 160 MB |
+| Model download | about 700 MB (bf16) | 1.4 GB (float32), 9 minutes here |
+| Cold build of 3,713 chunks | not rerun | 22 minutes, peak 1.36 GB for the whole process |
+| Model load, warm | about 35 s | 7 s (2 s import, 5 s load) |
+| Server memory with the model loaded | about 1.8 GB | 870 MB |
+
+Decision: keep. The embedding cache keeps its model id, and existing indexes stay valid.
+

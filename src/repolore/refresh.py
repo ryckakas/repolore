@@ -18,14 +18,12 @@ LOCK_FILE = "refresh.lock"
 STATUS_FILE = "refresh.json"
 LOG_FILE = "refresh.log"
 REQUEST_FILE = "refresh.requested"
-# How long a started refresh counts as running before its process holds the lock: Python and torch take seconds to load.
+# How long a started refresh counts as running before its process holds the lock: Python takes seconds to load.
 STARTUP_SECONDS = 120
 LOG_TAIL_LINES = 5
 PROGRESS_SECONDS = 2.0
 REPLACE_ATTEMPTS = 20
 REPLACE_WAIT_SECONDS = 0.05
-# The detached run writes to a log file, where progress bars would only add carriage-return noise.
-QUIET = {"HF_HUB_DISABLE_PROGRESS_BARS": "1", "TQDM_DISABLE": "1"}
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +87,7 @@ def start_refresh(data_dir: Path, db: str) -> bool:
     command = [sys.executable, *SAFE_PATH, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", db]
     try:
         with (data_dir / LOG_FILE).open("w", encoding="utf-8") as log:
-            spawn_detached(command, stdout=log, env=os.environ | QUIET, cwd=data_dir)
+            spawn_detached(command, stdout=log, env=os.environ, cwd=data_dir)
     except OSError:
         request.unlink()
         raise

@@ -8,6 +8,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -22,7 +23,8 @@ from repolore.config import Config, load_config
 from repolore.discovery import discover
 from repolore.doctor import diagnose, github_access
 from repolore.documents import Document, DocumentKind
-from repolore.embedding.local import MODELS, LocalEmbedder, ModelName, UnknownModelError, embedder_for
+from repolore.embedding import ModelUnavailableError
+from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, UnknownModelError, embedder_for
 from repolore.evals.harness import (
     METRICS,
     SEARCH_DEPTH,
@@ -34,7 +36,6 @@ from repolore.evals.harness import (
 )
 from repolore.evals.questions import QuestionKind, QuestionSet, load_questions
 from repolore.evals.runs import previous_run, run_record, save_run
-from repolore.hub import ModelUnavailableError
 from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos
@@ -215,18 +216,19 @@ def inspect(
     seed: Annotated[int | None, typer.Option(help="Seed for picking the samples, to see the same ones again.")] = None,
 ) -> None:
     """Chunk the cached documents as a default build would, and show counts, a token histogram and random samples."""
-    documents = _cached_documents(ctx.obj)
-    model = ModelName.VOYAGE_NANO
-    embedder = LocalEmbedder(MODELS[model])
+    paths: AppPaths = ctx.obj
+    documents = _cached_documents(paths)
+    embedder = LocalEmbedder(VOYAGE_NANO, paths.models_dir)
     limit = chunk_limit(None, embedder.max_tokens)
     with _exit_on(ModelUnavailableError):
+        embedder.download_tokenizer()
         chunks = [chunk for document in documents for chunk in chunk_document(document, limit, embedder.count_tokens)]
         tokens = embedder.count_tokens([chunk.embedded_text for chunk in chunks])
     typer.echo(f"{len(documents)} documents, {len(chunks)} chunks")
     kinds = Counter(chunk.document.kind for chunk in chunks)
     for kind in DocumentKind:
         typer.echo(f"  {kind:<8} {kinds[kind]:>6}")
-    _print_histogram(tokens, model)
+    _print_histogram(tokens)
     typer.echo(_limit_note(limit, chunks))
     for index in random.Random(seed).sample(range(len(chunks)), min(samples, len(chunks))):
         chunk = chunks[index]
@@ -237,10 +239,10 @@ def _limit_note(limit: int, chunks: list[Chunk]) -> str:
     return f"Chunks hold at most {limit} tokens; {count_split_sections(chunks)} sections were split to fit."
 
 
-def _print_histogram(tokens: list[int], model: ModelName) -> None:
+def _print_histogram(tokens: list[int]) -> None:
     counts = Counter(next((bucket for bucket in TOKEN_BUCKETS if count <= bucket), None) for count in tokens)
     largest = max(counts.values(), default=1)
-    typer.echo(f"tokens ({model})")
+    typer.echo("tokens")
     lower = 0
     for bucket in [*TOKEN_BUCKETS, None]:
         label = f"{lower + 1}-{bucket}" if bucket else f">{lower}"
@@ -268,7 +270,6 @@ def build(
             help="Split sections longer than this many tokens; 0 goes back to the default, 8192 or the model's window.",
         ),
     ] = None,
-    embedder: Annotated[ModelName | None, typer.Option(help="Local embedding model, voyage-4-nano at first.")] = None,
     bot_reviews: Annotated[
         bool | None, typer.Option(help="Index review threads started by bots such as CodeRabbit or Copilot.")
     ] = None,
@@ -279,18 +280,18 @@ def build(
     """
     _log_progress()
     paths: AppPaths = ctx.obj
-    _build(paths, db, _recorded_settings(paths.index_file(db)).overridden(max_tokens, bot_reviews, embedder))
+    _build(paths, db, _recorded_settings(paths.index_file(db)).overridden(max_tokens, bot_reviews))
 
 
 def _build(paths: AppPaths, db: str, settings: BuildSettings, report: Report = ignore) -> None:
     index_file = paths.index_file(db)
-    # Only a build embeds enough to gain from the GPU; queries stay on the CPU, which the MCP server's threads share.
-    model = LocalEmbedder(MODELS[settings.model], use_gpu=True)
+    model = LocalEmbedder(VOYAGE_NANO, paths.models_dir)
     limit = chunk_limit(settings.max_tokens, model.max_tokens)
     typer.echo(f"Building with {settings.described(limit)}.")
     documents = _cached_documents(paths, settings.bot_reviews)
-    report(Progress(phase=Phase.CHUNK))
     with _exit_on(ModelUnavailableError):
+        model.download(report)
+        report(Progress(phase=Phase.CHUNK))
         chunks = [chunk for document in documents for chunk in chunk_document(document, limit, model.count_tokens)]
     typer.echo(_limit_note(limit, chunks))
     with (
@@ -501,7 +502,7 @@ def search(
     filters = Filters(repo=repo, kind=kind, author=author)
     with _exit_on(*SEARCH_ERRORS), closing(connect(index_file)) as index:
         reranker = CrossEncoderReranker() if rerank else None
-        embedder = embedder_for(index_model(index)[0])
+        embedder = embedder_for(index_model(index)[0], paths.models_dir)
         hits = search_index(index, embedder, query, k, filters, mode, reranker, distinct=distinct)
     if not hits:
         typer.echo("No matches.")
@@ -535,7 +536,7 @@ def eval_(
     index_file = _index_or_exit(paths, db)
     with _exit_on(*SEARCH_ERRORS), closing(connect(index_file)) as index:
         settings = index_settings(index)
-        embedder = embedder_for(settings["model_id"])
+        embedder = embedder_for(settings["model_id"], paths.models_dir)
         missing = {source.url for q in questions for source in q.expected} - indexed_urls(index)
         chunks = sum(sum(kinds.values()) for kinds in repo_counts(index).values())
         reranker = CrossEncoderReranker() if rerank else None
@@ -644,7 +645,8 @@ def server_run(
     from repolore.shared_server import run_shared
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    if not run_shared(ctx.obj, db, idle_minutes, embedder_for):
+    paths: AppPaths = ctx.obj
+    if not run_shared(paths, db, idle_minutes, partial(embedder_for, models_dir=paths.models_dir)):
         _fail(f"A shared server for {db} is already running; `repolore server stop` stops it.")
 
 

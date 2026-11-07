@@ -7,7 +7,6 @@ from conftest import DocumentFactory, FakeEmbedder
 
 from repolore import indexing
 from repolore.chunking import Chunk, chunk_document
-from repolore.embedding.local import BGE_SMALL, VOYAGE_NANO, ModelName
 from repolore.indexing import MAX_BATCH, BuildSettings, build_index
 from repolore.progress import Phase, Progress
 from repolore.store import EmbeddingCache, cache_key, connect, index_model
@@ -157,48 +156,32 @@ def test_progress_with_everything_cached_counts_nothing_to_embed(
 
 
 def test_an_index_without_recorded_settings_builds_with_the_defaults() -> None:
-    assert BuildSettings.recorded({}) == BuildSettings(max_tokens=None, bot_reviews=False, model=ModelName.VOYAGE_NANO)
+    assert BuildSettings.recorded({}) == BuildSettings(max_tokens=None, bot_reviews=False)
 
 
 def test_recorded_settings_round_trip() -> None:
-    settings = BuildSettings(max_tokens=50, bot_reviews=True, model=ModelName.BGE_SMALL)
+    settings = BuildSettings(max_tokens=50, bot_reviews=True)
 
     assert settings.meta(50) == {"max_tokens": "50", "bot_reviews": "included"}
-    assert BuildSettings.recorded(settings.meta(50) | {"model_id": BGE_SMALL.model_id}) == settings
+    assert BuildSettings.recorded(settings.meta(50)) == settings
 
 
 @pytest.mark.parametrize(
-    ("model_id", "limit", "max_tokens"),
-    [
-        (VOYAGE_NANO.model_id, "8192", None),
-        (VOYAGE_NANO.model_id, "8191", 8191),
-        (VOYAGE_NANO.model_id, "whole", None),
-        (BGE_SMALL.model_id, "496", None),
-        (BGE_SMALL.model_id, "8192", 8192),
-    ],
+    ("limit", "max_tokens"),
+    [("8192", None), ("8191", 8191), ("whole", None)],
 )
-def test_a_recorded_limit_reads_back_as_the_default_when_it_is_the_models_default(
-    model_id: str, limit: str, max_tokens: int | None
-) -> None:
-    assert BuildSettings.recorded({"model_id": model_id, "max_tokens": limit}).max_tokens == max_tokens
-
-
-def test_an_unknown_recorded_model_falls_back_to_the_default() -> None:
-    assert BuildSettings.recorded({"model_id": "fake-bag-of-words"}).model == ModelName.VOYAGE_NANO
+def test_a_recorded_limit_reads_back_as_the_default_when_it_is_the_default(limit: str, max_tokens: int | None) -> None:
+    assert BuildSettings.recorded({"max_tokens": limit}).max_tokens == max_tokens
 
 
 def test_only_given_options_override_the_recorded_settings() -> None:
-    recorded = BuildSettings(max_tokens=50, bot_reviews=True, model=ModelName.BGE_SMALL)
+    recorded = BuildSettings(max_tokens=50, bot_reviews=True)
 
     assert recorded.overridden() == recorded
-    assert recorded.overridden(max_tokens=0, bot_reviews=False) == BuildSettings(model=ModelName.BGE_SMALL)
-    assert recorded.overridden(max_tokens=1, model=ModelName.VOYAGE_NANO) == BuildSettings(
-        1, True, ModelName.VOYAGE_NANO
-    )
+    assert recorded.overridden(max_tokens=0, bot_reviews=False) == BuildSettings()
+    assert recorded.overridden(max_tokens=1) == BuildSettings(1, True)
 
 
 def test_settings_describe_themselves() -> None:
-    assert BuildSettings().described(8192) == (
-        "sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano"
-    )
-    assert BuildSettings(50, True).described(50) == "sections split at 50 tokens, bot reviews included, voyage-4-nano"
+    assert BuildSettings().described(8192) == "sections split at 8192 tokens (the default), bot reviews excluded"
+    assert BuildSettings(50, True).described(50) == "sections split at 50 tokens, bot reviews included"

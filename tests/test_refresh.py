@@ -115,20 +115,18 @@ def spawned(monkeypatch: pytest.MonkeyPatch) -> Spawned:
     return calls
 
 
-def test_a_refresh_is_started_as_a_quiet_detached_process(tmp_path: Path, spawned: Spawned) -> None:
+def test_a_refresh_is_started_as_a_detached_process(tmp_path: Path, spawned: Spawned) -> None:
     data_dir = tmp_path / "data"
 
     assert start_refresh(data_dir, "experiment")
 
-    [(command, stdout, env, cwd)] = spawned
+    [(command, stdout, _, cwd)] = spawned
     assert command == [
         *[sys.executable, "-P", "-m", "repolore", "--data-dir", str(data_dir)],
         *["refresh", "--db", "experiment"],
     ]
     assert cwd == data_dir
     assert stdout.name == str(data_dir / LOG_FILE)
-    assert env["TQDM_DISABLE"] == "1"
-    assert env["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
     assert (data_dir / LOG_FILE).exists()
 
 

@@ -7,6 +7,10 @@ import numpy.typing as npt
 Vectors = npt.NDArray[np.float32]
 
 
+class ModelUnavailableError(Exception):
+    pass
+
+
 class Embedder(Protocol):
     @property
     def model_id(self) -> str: ...
@@ -20,7 +24,7 @@ class Embedder(Protocol):
         ...
 
     def embed_documents(self, texts: Sequence[str]) -> Vectors:
-        """Vectors for the texts in one forward pass: the caller decides what fits in a batch."""
+        """Vectors for the texts. An engine may pad a batch to its longest text, so the caller decides what fits."""
         ...
 
     def count_tokens(self, texts: Sequence[str]) -> list[int]: ...

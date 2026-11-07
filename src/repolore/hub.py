@@ -3,16 +3,7 @@ from contextlib import contextmanager
 
 import httpx
 
-
-class ModelUnavailableError(Exception):
-    pass
-
-
-def cache_dir() -> str:
-    """Where Hugging Face models are cached, which HF_HOME or HF_HUB_CACHE can move."""
-    from huggingface_hub import constants
-
-    return constants.HF_HUB_CACHE
+from repolore.embedding import ModelUnavailableError
 
 
 @contextmanager
