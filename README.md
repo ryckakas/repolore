@@ -5,7 +5,7 @@ CLI and from Claude Code over MCP. It answers questions like "why did we drop th
 passages that explain it and links to them.
 
 Everything runs on your machine with your own GitHub token. Embeddings are computed locally, so no model API key is
-needed, and nothing leaves your machine except GitHub API calls and the one-time model download from Hugging Face.
+needed, and nothing leaves your machine except GitHub API calls and the one-time model download from GitHub.
 
 ## Quickstart
 
@@ -20,7 +20,8 @@ and macOS 14+ on Apple Silicon.
 
    `--managed-python` makes uv use its own Python build, which can load the SQLite extension the index needs; some
    system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, run
-   `uv tool update-shell` and open a new terminal. The install takes about 1.2 GB, mostly PyTorch.
+   `uv tool update-shell` and open a new terminal. The install takes about 160 MB. Reranking (`--rerank`, off by
+   default) needs PyTorch on top, about 900 MB more, and says how to add it when you ask for it.
 
 2. Give it GitHub access. If you're logged in with the [GitHub CLI](https://cli.github.com/) (`gh auth login`),
    there's nothing to do. Otherwise set `REPOLORE_GITHUB_TOKEN` to a classic token with the `repo` scope, plus
@@ -38,9 +39,9 @@ and macOS 14+ on Apple Silicon.
    other people's repos. The first refresh embeds everything on your machine, which takes a while for a large
    account, so start with a few repos.
 
-   The first refresh also downloads the embedding model, about 700 MB. As a rough guide, a small repo of 149 chunks
-   took 4.5 minutes on a 12-core desktop CPU, download included. On Apple Silicon, it embeds on the GPU, roughly twice
-   as fast; set `REPOLORE_DEVICE=cpu` to keep it on the CPU. `repolore doctor` shows how far it has got.
+   The first refresh also downloads the embedding model from GitHub, about 1.4 GB. As a rough guide, 3,713 chunks took
+   22 minutes to embed on a 12-core desktop CPU, after a 9-minute download. Every platform embeds on the CPU for now.
+   `repolore doctor` shows how far it has got.
 
    Every question has a flag, which `repolore setup --help` lists, so it can run without asking:
    `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when `repolore.toml` exists).
@@ -148,13 +149,13 @@ tool_timeout_sec = 300
 
 Codex's startup timeout covers the server's `tools/list`, which takes about 8 seconds when no shared server is
 running yet and longer after a reboot, and its tool timeout covers a search that waits for the model to load, about
-30 seconds warm and minutes cold. Its documented defaults are 10 and 60 seconds. When building a session's tool list,
+10 seconds warm and longer cold. Its documented defaults are 10 and 60 seconds. When building a session's tool list,
 Codex waits only about a second for servers that aren't required (`mcp_optional_startup_grace_ms`); set that to `0`,
 or `required = true` on this server, to wait for the startup timeout instead.
 
 Codex gives a server only a short list of environment variables: `PATH`, the home, app data and temp folders, and a
-few more. That's enough for `gh auth token` (checked on Windows). If you rely on `REPOLORE_GITHUB_TOKEN`, `HF_HOME`,
-`HTTPS_PROXY`, `REPOLORE_DEVICE` or an `XDG_*` directory, list it in `env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay
+few more. That's enough for `gh auth token` (checked on Windows). If you rely on `REPOLORE_GITHUB_TOKEN`,
+`HTTPS_PROXY` or an `XDG_*` directory, list it in `env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay
 finds its folders through `XDG_*`, and the shared server, which every client's sessions share, and the refreshes it
 starts inherit the environment of whichever session started it.
 

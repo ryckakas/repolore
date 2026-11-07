@@ -192,13 +192,13 @@ def test_codex_entry_follows_the_existing_config(codex_dir: Path) -> None:
 @pytest.mark.usefixtures("runs")
 def test_codex_entry_passes_on_the_variables_repolore_reads(codex_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REPOLORE_GITHUB_TOKEN", "token")
-    monkeypatch.setenv("HF_HOME", str(codex_dir))
+    monkeypatch.setenv("XDG_DATA_HOME", str(codex_dir))
     monkeypatch.setenv("HTTPS_PROXY", "")
 
     register(CODEX)
 
     config = tomllib.loads((codex_dir / "config.toml").read_text(encoding="utf-8"))
-    assert config["mcp_servers"]["repolore"]["env_vars"] == ["REPOLORE_GITHUB_TOKEN", "HF_HOME"]
+    assert config["mcp_servers"]["repolore"]["env_vars"] == ["REPOLORE_GITHUB_TOKEN", "XDG_DATA_HOME"]
 
 
 @pytest.mark.usefixtures("runs")

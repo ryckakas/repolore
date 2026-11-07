@@ -34,6 +34,16 @@ def stub_cross_encoder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(CrossEncoder=StubCrossEncoder))
 
 
+def test_without_the_extra_it_says_how_to_install_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    with pytest.raises(ModelUnavailableError) as raised:
+        CrossEncoderReranker().rerank("q", [hit("a")])
+
+    assert "\n" not in str(raised.value)
+    assert "repolore[rerank]" in str(raised.value)
+
+
 def hit(text: str) -> Hit:
     return Hit(
         text, f"https://github.com/octo/repo/pull/{len(text)}", "octo/repo", "pr", "t", None, None, None, "h", text, 0.1

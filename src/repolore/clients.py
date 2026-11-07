@@ -18,7 +18,6 @@ tool_timeout_sec = 300
 """
 CODEX_PASSES_ON = (
     "REPOLORE_GITHUB_TOKEN",
-    "HF_HOME",
     "HTTPS_PROXY",
     "REPOLORE_DEVICE",
     "XDG_CONFIG_HOME",

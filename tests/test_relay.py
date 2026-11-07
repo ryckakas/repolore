@@ -18,7 +18,6 @@ from repolore import mcp_server, relay
 from repolore import shared_server as shared_server_module
 from repolore.locks import hold
 from repolore.paths import AppPaths
-from repolore.refresh import QUIET
 from repolore.relay import (
     Relay,
     ServerUnavailable,
@@ -138,14 +137,13 @@ def test_the_server_is_started_detached_with_its_log_appended(tmp_path: Path, mo
 
     start_server(files)
 
-    [(command, log, env, cwd)] = spawned
+    [(command, log, _, cwd)] = spawned
     assert cwd == files.data_dir
     assert command == [
         *[sys.executable, "-P", "-m", "repolore", "--data-dir", str(files.data_dir)],
         *["server", "run", "--db", "experiment"],
     ]
     assert (log.name, log.mode) == (str(files.log), "a")
-    assert env.items() >= QUIET.items()
 
 
 def _starting(server: SharedServer) -> Callable[[ServerFiles], Discovery]:
@@ -345,7 +343,7 @@ def test_standalone_serves_from_the_relay_process(tmp_path: Path, monkeypatch: p
 
 
 def test_the_relay_loads_no_model_or_index_code() -> None:
-    heavy = ["torch", "numpy", "sqlite_vec", "sentence_transformers", "repolore.mcp_server", "repolore.store"]
+    heavy = ["onnxruntime", "numpy", "sqlite_vec", "tokenizers", "repolore.mcp_server", "repolore.store"]
     script = f"import sys, repolore.relay; print([name for name in {heavy!r} if name in sys.modules])"
 
     loaded = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True).stdout
