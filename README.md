@@ -67,6 +67,11 @@ uses.
 system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, run
 `uv tool update-shell` and open a new terminal. The install takes about 160 MB.
 
+The first launch of each command compiles its Python code, which took about 25 seconds on Windows, close to Claude
+Code's 30-second wait for an MCP server; later launches take a few seconds. Adding `--compile-bytecode` to the
+install does that work up front instead. On some Windows machines uv then fails with "os error 1224"
+([astral-sh/uv#14017](https://github.com/astral-sh/uv/issues/14017)); install without it there.
+
 Reranking (`--rerank`, off by default) needs PyTorch on top, about 900 MB more, and says how to add it when you ask
 for it.
 
