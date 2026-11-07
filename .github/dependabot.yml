@@ -14,8 +14,12 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      # Alone, because CI can't run Metal: an mlx bump waits for `uv run pytest -m live` on a Mac.
+      mlx:
+        patterns: [mlx, mlx-cpu, mlx-metal]
       uv-minor-and-patch:
         update-types: [minor, patch]
+        exclude-patterns: [mlx, mlx-cpu, mlx-metal]
 
   - package-ecosystem: github-actions
     directory: /

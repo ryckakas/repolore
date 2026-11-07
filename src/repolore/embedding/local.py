@@ -2,7 +2,7 @@ import os
 import platform
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache
 from itertools import batched
@@ -25,6 +25,18 @@ SMALLEST_NORM = 1e-12
 
 
 @dataclass(frozen=True)
+class Architecture:
+    """The transformer's shape, which the hand-written MLX forward pass needs; ONNX Runtime reads it from the graph."""
+
+    layers: int
+    heads: int
+    kv_heads: int
+    head_dim: int
+    eps: float
+    rope_base: float
+
+
+@dataclass(frozen=True)
 class LocalModel:
     name: str
     revision: str
@@ -33,6 +45,7 @@ class LocalModel:
     document_prompt: str
     query_prompt: str
     release: ModelRelease
+    architecture: Architecture
 
     @property
     def model_id(self) -> str:
@@ -66,6 +79,7 @@ VOYAGE_NANO = LocalModel(
             "tokenizer.json", 7_031_645, "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
         ),
     ),
+    architecture=Architecture(layers=12, heads=16, kv_heads=8, head_dim=128, eps=1e-6, rope_base=1_000_000.0),
 )
 
 
@@ -105,6 +119,13 @@ class OnnxEngine:
         return pool(np.asarray(outputs[0], dtype=np.float32)[0], self._dim)
 
 
+EngineFactory = Callable[[LocalModel, Path], Engine]
+
+
+def onnx_engine(spec: LocalModel, folder: Path) -> Engine:
+    return OnnxEngine(folder / spec.release.graph.name, spec.dim)
+
+
 def pool(token_vectors: Vectors, dim: int) -> Vectors:
     """Mean over the tokens, normalized, cut to the model's dimensions and normalized again."""
     return _unit(_unit(token_vectors.mean(axis=0))[:dim])
@@ -122,8 +143,9 @@ class _Tokenizers(NamedTuple):
 class LocalEmbedder:
     """A model run on this machine: tokenizers, prompts and truncation here, the forward pass in its engine."""
 
-    def __init__(self, model: LocalModel, models_dir: Path) -> None:
+    def __init__(self, model: LocalModel, models_dir: Path, load_engine: EngineFactory = onnx_engine) -> None:
         self._spec = model
+        self._load_engine = load_engine
         self._models_dir = models_dir
         self._folder = model.release.folder(models_dir)
         self._engine: Engine | None = None
@@ -182,7 +204,7 @@ class LocalEmbedder:
             if self._engine is None:
                 release = self._spec.release
                 self._require(release.files)
-                self._engine = OnnxEngine(self._folder / release.graph.name, self._spec.dim)
+                self._engine = self._load_engine(self._spec, self._folder)
             return self._engine
 
     def _tokenizers_loaded(self) -> _Tokenizers:

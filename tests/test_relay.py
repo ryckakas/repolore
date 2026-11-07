@@ -343,7 +343,7 @@ def test_standalone_serves_from_the_relay_process(tmp_path: Path, monkeypatch: p
 
 
 def test_the_relay_loads_no_model_or_index_code() -> None:
-    heavy = ["onnxruntime", "numpy", "sqlite_vec", "tokenizers", "repolore.mcp_server", "repolore.store"]
+    heavy = ["onnxruntime", "mlx", "numpy", "sqlite_vec", "tokenizers", "repolore.mcp_server", "repolore.store"]
     script = f"import sys, repolore.relay; print([name for name in {heavy!r} if name in sys.modules])"
 
     loaded = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True).stdout
