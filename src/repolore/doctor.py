@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from repolore import __version__
 from repolore.clients import CLIENTS, McpClient, registration
 from repolore.config import load_config
+from repolore.embedding.engines import build_engine
 from repolore.embedding.local import VOYAGE_NANO, is_downloaded, spec_for
 from repolore.indexing import WHOLE
 from repolore.paths import AppPaths
@@ -57,6 +58,7 @@ def diagnose(
     yield config_check(paths.config_file)
     yield index_check(index_file)
     yield model_check(index_file, paths.models_dir)
+    yield engine_check()
     yield refresh_check(paths.data_dir)
     yield server_check(ServerFiles(paths.data_dir, db))
     for client in clients:
@@ -178,6 +180,11 @@ def model_check(index_file: Path, models_dir: Path) -> Check:
         f"`repolore refresh` downloads it, {size:.1f} GB; behind a proxy that blocks github.com, "
         f"put the files from {release.url} there by hand",
     )
+
+
+def engine_check() -> Check:
+    """Which engine a build would embed with; the CPU still works, so it never fails."""
+    return Check("build engine", True, build_engine().name)
 
 
 def _index_model(index_file: Path) -> str | None:

@@ -40,8 +40,9 @@ and macOS 14+ on Apple Silicon.
    account, so start with a few repos.
 
    The first refresh also downloads the embedding model from GitHub, about 1.4 GB. As a rough guide, 3,713 chunks took
-   22 minutes to embed on a 12-core desktop CPU, after a 9-minute download. Every platform embeds on the CPU for now.
-   `repolore doctor` shows how far it has got.
+   22 minutes to embed on a 12-core desktop CPU, after a 9-minute download. On Apple Silicon it embeds on the GPU
+   through MLX; set `REPOLORE_DEVICE=cpu` to keep it on the CPU. `repolore doctor` shows how far it has got and
+   which engine a build uses.
 
    Every question has a flag, which `repolore setup --help` lists, so it can run without asking:
    `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when `repolore.toml` exists).
@@ -155,7 +156,7 @@ or `required = true` on this server, to wait for the startup timeout instead.
 
 Codex gives a server only a short list of environment variables: `PATH`, the home, app data and temp folders, and a
 few more. That's enough for `gh auth token` (checked on Windows). If you rely on `REPOLORE_GITHUB_TOKEN`,
-`HTTPS_PROXY` or an `XDG_*` directory, list it in `env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay
+`HTTPS_PROXY`, `REPOLORE_DEVICE` or an `XDG_*` directory, list it in `env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay
 finds its folders through `XDG_*`, and the shared server, which every client's sessions share, and the refreshes it
 starts inherit the environment of whichever session started it.
 

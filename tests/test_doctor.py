@@ -16,6 +16,7 @@ from repolore.doctor import (
     Check,
     config_check,
     diagnose,
+    engine_check,
     github_access,
     github_check,
     index_check,
@@ -25,7 +26,8 @@ from repolore.doctor import (
     server_check,
     vectors_check,
 )
-from repolore.embedding.local import VOYAGE_NANO
+from repolore.embedding.engines import EngineChoice
+from repolore.embedding.local import VOYAGE_NANO, onnx_engine
 from repolore.locks import hold
 from repolore.paths import AppPaths
 from repolore.progress import Phase, Progress
@@ -476,10 +478,18 @@ def test_diagnose_checks_every_part_in_order(data_paths: AppPaths, monkeypatch: 
         "repolore.toml",
         "index default",
         "model",
+        "build engine",
         "last refresh",
         "shared server",
         "Codex",
     ]
+
+
+@pytest.mark.parametrize("engine", ["MLX on the GPU", "ONNX Runtime on the CPU"])
+def test_the_build_engine_is_reported_and_never_fails(monkeypatch: pytest.MonkeyPatch, engine: str) -> None:
+    monkeypatch.setattr(doctor, "build_engine", lambda: EngineChoice(engine, onnx_engine))
+
+    assert engine_check() == Check("build engine", True, engine)
 
 
 @pytest.mark.usefixtures("env_token")
