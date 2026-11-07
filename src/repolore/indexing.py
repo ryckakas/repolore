@@ -8,7 +8,7 @@ import numpy as np
 
 from repolore.chunking import Chunk, chunk_limit
 from repolore.embedding import Embedder, Vectors
-from repolore.embedding.local import MODELS, ModelName, model_named_in
+from repolore.embedding.local import VOYAGE_NANO
 from repolore.progress import Phase, Progress, Report, ignore
 from repolore.store import EmbeddingCache, cache_key, write_index
 
@@ -24,30 +24,21 @@ log = logging.getLogger(__name__)
 class BuildSettings:
     max_tokens: int | None = None
     bot_reviews: bool = False
-    model: ModelName = ModelName.VOYAGE_NANO
 
     @classmethod
     def recorded(cls, meta: Mapping[str, str]) -> Self:
         """The settings an index was built with; anything it doesn't record keeps the default."""
-        model = model_named_in(meta.get("model_id", "")) or cls.model
         limit = meta.get("max_tokens", WHOLE)
-        # The default limit is recorded as a number but read back as the default, so it follows a new model.
-        default = limit == WHOLE or int(limit) == chunk_limit(None, MODELS[model].max_tokens)
-        return cls(
-            max_tokens=None if default else int(limit),
-            bot_reviews=meta.get("bot_reviews") == INCLUDED,
-            model=model,
-        )
+        # The default limit is recorded as a number but read back as the default, so it follows a new default.
+        default = limit == WHOLE or int(limit) == chunk_limit(None, VOYAGE_NANO.max_tokens)
+        return cls(max_tokens=None if default else int(limit), bot_reviews=meta.get("bot_reviews") == INCLUDED)
 
-    def overridden(
-        self, max_tokens: int | None = None, bot_reviews: bool | None = None, model: ModelName | None = None
-    ) -> Self:
+    def overridden(self, max_tokens: int | None = None, bot_reviews: bool | None = None) -> Self:
         """These settings with every option that was given; a max_tokens of 0 means the default limit."""
         return replace(
             self,
             max_tokens=self.max_tokens if max_tokens is None else (max_tokens or None),
             bot_reviews=self.bot_reviews if bot_reviews is None else bot_reviews,
-            model=model or self.model,
         )
 
     def meta(self, limit: int) -> dict[str, str]:
@@ -56,7 +47,7 @@ class BuildSettings:
 
     def described(self, limit: int) -> str:
         default = " (the default)" if self.max_tokens is None else ""
-        return f"sections split at {limit} tokens{default}, bot reviews {self._bot_reviews}, {self.model}"
+        return f"sections split at {limit} tokens{default}, bot reviews {self._bot_reviews}"
 
     @property
     def _bot_reviews(self) -> str:

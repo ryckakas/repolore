@@ -25,7 +25,7 @@ from repolore.doctor import (
     server_check,
     vectors_check,
 )
-from repolore.embedding.local import BGE_SMALL, VOYAGE_NANO
+from repolore.embedding.local import VOYAGE_NANO
 from repolore.locks import hold
 from repolore.paths import AppPaths
 from repolore.progress import Phase, Progress
@@ -256,9 +256,9 @@ def test_an_index_is_summed_up(index_file: Path, corpus: list[Chunk]) -> None:
 
 
 def test_an_index_names_its_chunk_limit(tmp_path: Path, corpus: list[Chunk]) -> None:
-    check = index_check(index_built_with(tmp_path, BGE_SMALL.model_id, corpus))
+    check = index_check(index_built_with(tmp_path, VOYAGE_NANO.model_id, corpus))
 
-    assert f"with {BGE_SMALL.model_id}, at most 8176 tokens a chunk, bot reviews excluded" in check.detail
+    assert f"with {VOYAGE_NANO.model_id}, at most 8176 tokens a chunk, bot reviews excluded" in check.detail
 
 
 def test_a_missing_index_fails_with_how_to_build_it(tmp_path: Path) -> None:
@@ -293,10 +293,10 @@ def test_the_index_model_is_found_in_the_cache(
     monkeypatch.setattr(doctor, "is_cached", lambda spec: checked.append(spec) or True)
     monkeypatch.setattr(doctor, "cache_dir", lambda: "/hf")
 
-    check = model_check(index_built_with(tmp_path, BGE_SMALL.model_id, corpus))
+    check = model_check(index_built_with(tmp_path, VOYAGE_NANO.model_id, corpus))
 
-    assert check == Check("model", True, f"{BGE_SMALL.model_id} is in /hf")
-    assert checked == [BGE_SMALL]
+    assert check == Check("model", True, f"{VOYAGE_NANO.model_id} is in /hf")
+    assert checked == [VOYAGE_NANO]
 
 
 @pytest.mark.parametrize("index", ["none", "empty"])

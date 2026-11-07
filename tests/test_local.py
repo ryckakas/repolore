@@ -188,35 +188,18 @@ def test_real_model_embeds_unit_vectors() -> None:
     assert float(np.linalg.norm(embedder.embed_query("why was the release delayed?"))) == pytest.approx(1.0)
 
 
-@pytest.mark.usefixtures("stub_sentence_transformers")
-def test_bge_small_gets_its_query_instruction_and_no_remote_code() -> None:
-    LocalEmbedder(local.BGE_SMALL).embed_query("a")
-
-    load = StubModel.loads[0]
-    assert load["name"] == "BAAI/bge-small-en-v1.5"
-    assert load["trust_remote_code"] is False
-    assert load["truncate_dim"] == 384
-    assert load["prompts"] == {"query": "Represent this sentence for searching relevant passages: "}
-
-
 def test_embedder_for_matches_the_index_model_and_reuses_it() -> None:
-    embedder = embedder_for(local.BGE_SMALL.model_id)
+    embedder = embedder_for(local.VOYAGE_NANO.model_id)
 
-    assert embedder.model_id == "BAAI/bge-small-en-v1.5@5c38ec7c405e"
-    assert embedder.dim == 384
-    assert embedder_for(local.BGE_SMALL.model_id) is embedder
+    assert embedder.model_id == local.VOYAGE_NANO.model_id
+    assert embedder.dim == 1024
+    assert embedder_for(local.VOYAGE_NANO.model_id) is embedder
 
 
-def test_embedder_for_an_unknown_model_says_to_rebuild() -> None:
+@pytest.mark.parametrize("model_id", ["someone/else@123", "BAAI/bge-small-en-v1.5@5c38ec7c405e"])
+def test_embedder_for_an_unknown_model_says_to_rebuild(model_id: str) -> None:
     with pytest.raises(UnknownModelError, match="rebuild it"):
-        embedder_for("someone/else@123")
-
-
-def test_a_recorded_model_is_named_whichever_revision_it_was_pinned_to() -> None:
-    assert local.model_named_in(local.BGE_SMALL.model_id) == local.ModelName.BGE_SMALL
-    assert local.model_named_in("voyageai/voyage-4-nano@000000000000") == local.ModelName.VOYAGE_NANO
-    assert local.model_named_in("voyageai/voyage-4-nano-v2@000000000000") is None
-    assert local.model_named_in("") is None
+        embedder_for(model_id)
 
 
 @dataclass
@@ -261,16 +244,16 @@ def test_tokens_are_counted_with_the_cached_tokenizer_and_without_its_truncation
 def test_a_tokenizer_not_in_the_cache_is_downloaded_at_the_pinned_revision(tiny_hub: TinyHub) -> None:
     tiny_hub.cached = False
 
-    assert LocalEmbedder(local.BGE_SMALL).count_tokens(["retry upload"]) == [2]
-    assert tiny_hub.downloads == [("BAAI/bge-small-en-v1.5", "tokenizer.json", local.BGE_SMALL.revision)]
+    assert LocalEmbedder().count_tokens(["retry upload"]) == [2]
+    assert tiny_hub.downloads == [("voyageai/voyage-4-nano", "tokenizer.json", local.VOYAGE_NANO.revision)]
 
 
 def test_a_tokenizer_neither_cached_nor_downloadable_says_how_to_get_it(tiny_hub: TinyHub) -> None:
     tiny_hub.cached = False
     tiny_hub.reachable = False
 
-    with pytest.raises(ModelUnavailableError, match=r"BAAI/bge-small-en-v1\.5 .* locate the file on the Hub\. Run"):
-        LocalEmbedder(local.BGE_SMALL).count_tokens(["retry"])
+    with pytest.raises(ModelUnavailableError, match=r"voyage-4-nano .* locate the file on the Hub\. Run"):
+        LocalEmbedder().count_tokens(["retry"])
 
 
 def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -281,15 +264,14 @@ def test_many_texts_are_counted_in_slices(tiny_hub: TinyHub, monkeypatch: pytest
 
 def test_the_window_leaves_room_for_the_prompt() -> None:
     assert LocalEmbedder().max_tokens == 32_768 - local.PROMPT_MARGIN
-    assert LocalEmbedder(local.BGE_SMALL).max_tokens == 512 - local.PROMPT_MARGIN
 
 
 @pytest.mark.usefixtures("stub_sentence_transformers")
 def test_a_model_is_cached_when_its_pinned_modules_json_and_weights_are() -> None:
-    assert local.is_cached(local.BGE_SMALL)
+    assert local.is_cached(local.VOYAGE_NANO)
     assert StubModel.cache_lookups == [
-        ("BAAI/bge-small-en-v1.5", "modules.json", local.BGE_SMALL.revision),
-        ("BAAI/bge-small-en-v1.5", "model.safetensors", local.BGE_SMALL.revision),
+        ("voyageai/voyage-4-nano", "modules.json", local.VOYAGE_NANO.revision),
+        ("voyageai/voyage-4-nano", "model.safetensors", local.VOYAGE_NANO.revision),
     ]
 
 
@@ -297,15 +279,14 @@ def test_a_model_is_cached_when_its_pinned_modules_json_and_weights_are() -> Non
 def test_a_model_whose_weights_never_finished_downloading_is_not_cached() -> None:
     StubModel.safetensors_cached = False
 
-    assert not local.is_cached(local.BGE_SMALL)
+    assert not local.is_cached(local.VOYAGE_NANO)
 
-    LocalEmbedder(local.BGE_SMALL).embed_query("a")
+    LocalEmbedder().embed_query("a")
     assert "local_files_only" not in StubModel.loads[0]
 
 
-@pytest.mark.parametrize("spec", [local.VOYAGE_NANO, local.BGE_SMALL])
-def test_a_recorded_model_id_names_its_spec(spec: local.LocalModel) -> None:
-    assert local.spec_for(spec.model_id) is spec
+def test_a_recorded_model_id_names_its_spec() -> None:
+    assert local.spec_for(local.VOYAGE_NANO.model_id) is local.VOYAGE_NANO
 
 
 def test_a_model_id_of_another_revision_has_no_spec() -> None:

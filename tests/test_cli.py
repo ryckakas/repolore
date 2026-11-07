@@ -20,7 +20,6 @@ from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
 from repolore.documents import Document
-from repolore.embedding.local import BGE_SMALL, LocalModel
 from repolore.hub import ModelUnavailableError
 from repolore.locks import hold
 from repolore.paths import AppPaths, resolve_paths
@@ -283,7 +282,7 @@ def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch:
     lines = [line.split() for line in result.output.splitlines()]
     assert lines[0] == ["7", "documents,", "22", "chunks"]
     assert lines[1:7] == [["pr", "3"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["plan", "0"]]
-    assert lines[7] == ["tokens", "(voyage-4-nano)"]
+    assert lines[7] == ["tokens"]
     buckets = ["1-50", "51-100", "101-200", "201-400", "401-800", "801-2048", "2049-8192", ">8192"]
     assert [line[0] for line in lines[8:16]] == buckets
     assert sum(int(line[1]) for line in lines[8:16]) == 22
@@ -627,7 +626,7 @@ def test_rebuild_without_options_keeps_the_recorded_settings(cached_crashcause: 
     result = runner.invoke(app, ["build", "--db", "kept"])
 
     assert result.exit_code == 0
-    assert "Building with sections split at 50 tokens, bot reviews included, voyage-4-nano." in result.output
+    assert "Building with sections split at 50 tokens, bot reviews included." in result.output
     assert "Warning: build settings changed" not in result.output
     assert "0 embedded" in result.output
     with closing(connect(cached_crashcause / "db" / "kept.db")) as db:
@@ -649,10 +648,7 @@ def test_first_build_uses_the_defaults(cached_crashcause: Path) -> None:
     result = runner.invoke(app, ["build", "--db", "fresh"])
 
     assert result.exit_code == 0
-    assert (
-        "Building with sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano."
-        in result.output
-    )
+    assert "Building with sections split at 8192 tokens (the default), bot reviews excluded." in result.output
 
 
 def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -> None:
@@ -662,30 +658,7 @@ def test_an_empty_index_file_builds_with_the_defaults(cached_crashcause: Path) -
     result = runner.invoke(app, ["build", "--db", "empty"])
 
     assert result.exit_code == 0
-    assert (
-        "Building with sections split at 8192 tokens (the default), bot reviews excluded, voyage-4-nano."
-        in result.output
-    )
-
-
-def test_rebuild_keeps_the_recorded_model(cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    loaded: list[tuple[LocalModel, bool]] = []
-
-    def local_embedder(model: LocalModel, *, use_gpu: bool = False) -> FakeEmbedder:
-        loaded.append((model, use_gpu))
-        embedder = FakeEmbedder()
-        embedder.model_id = model.model_id
-        embedder.max_tokens = model.max_tokens
-        return embedder
-
-    monkeypatch.setattr("repolore.cli.LocalEmbedder", local_embedder)
-    runner.invoke(app, ["build", "--db", "small-model", "--embedder", "bge-small"])
-
-    result = runner.invoke(app, ["build", "--db", "small-model"])
-
-    assert loaded == [(BGE_SMALL, True), (BGE_SMALL, True)]
-    assert "Building with sections split at 496 tokens (the default), bot reviews excluded, bge-small." in result.output
-    assert "Warning: build settings changed" not in result.output
+    assert "Building with sections split at 8192 tokens (the default), bot reviews excluded." in result.output
 
 
 def test_build_without_cached_documents_leaves_no_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -781,7 +754,7 @@ def test_refresh_ingests_then_rebuilds_with_the_recorded_settings(
     assert result.exit_code == 0
     assert fetched == [False]
     assert seen == [Progress(phase=Phase.DISCOVER), Progress(phase=Phase.INGEST, done=1, total=2)]
-    assert "Building with sections split at 50 tokens, bot reviews excluded, voyage-4-nano." in result.output
+    assert "Building with sections split at 50 tokens, bot reviews excluded." in result.output
     assert "0 embedded" in result.output
     status = refresh_status(cached_crashcause)
     assert (status.running, status.ok, status.error, status.progress) == (False, True, None, None)

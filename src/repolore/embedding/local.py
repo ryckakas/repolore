@@ -3,7 +3,6 @@ import threading
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
-from enum import StrEnum
 from functools import cache, partial
 from itertools import batched
 from typing import TYPE_CHECKING
@@ -37,7 +36,7 @@ class LocalModel:
 
     @property
     def max_tokens(self) -> int:
-        # Room for the document prompt (7 tokens for voyage-4-nano) and special tokens (2 for bge-small).
+        # Room for the document prompt, 7 tokens.
         return self.max_seq_length - PROMPT_MARGIN
 
 
@@ -49,27 +48,6 @@ VOYAGE_NANO = LocalModel(
     max_seq_length=32_768,
     trust_remote_code=True,
 )
-BGE_SMALL = LocalModel(
-    name="BAAI/bge-small-en-v1.5",
-    revision="5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
-    dim=384,
-    max_seq_length=512,
-    # The model card's query instruction; the checkpoint doesn't ship it as a saved prompt.
-    prompts={"query": "Represent this sentence for searching relevant passages: "},
-)
-
-
-class ModelName(StrEnum):
-    VOYAGE_NANO = "voyage-4-nano"
-    BGE_SMALL = "bge-small"
-
-
-MODELS = {ModelName.VOYAGE_NANO: VOYAGE_NANO, ModelName.BGE_SMALL: BGE_SMALL}
-
-
-def model_named_in(model_id: str) -> ModelName | None:
-    """The model a recorded id names, whichever revision it was pinned to then."""
-    return next((name for name, spec in MODELS.items() if model_id.startswith(f"{spec.name}@")), None)
 
 
 class UnknownModelError(Exception):
@@ -77,7 +55,7 @@ class UnknownModelError(Exception):
 
 
 class LocalEmbedder:
-    """A sentence-transformers model. The default, voyage-4-nano, shares Voyage's hosted embedding space.
+    """voyage-4-nano through sentence-transformers, which shares Voyage's hosted embedding space.
 
     It runs on the CPU. With use_gpu, it runs on the device REPOLORE_DEVICE names, or else on the Apple Silicon GPU
     when there is one.
@@ -203,7 +181,7 @@ def _tokenizer_file(spec: LocalModel) -> str:
 
 def spec_for(model_id: str) -> LocalModel | None:
     """The model an index records, if repolore can load that revision."""
-    return next((spec for spec in MODELS.values() if spec.model_id == model_id), None)
+    return VOYAGE_NANO if model_id == VOYAGE_NANO.model_id else None
 
 
 @cache

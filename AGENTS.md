@@ -37,8 +37,8 @@ uv run repolore ingest      # fetch what changed in them into the raw cache; --f
 uv run repolore inspect     # chunk the cached documents: counts, token histogram, random samples
 uv run repolore build       # embed what changed and write the index (<data-dir>/db/default.db; --db names another,
                             # --max-tokens splits long sections (0: the default, 8192 or a smaller window),
-                            # --embedder picks the model, --bot-reviews/--no-bot-reviews keeps or drops review
-                            # threads started by bots; a left-out option keeps the index's last value)
+                            # --bot-reviews/--no-bot-reviews keeps or drops review threads started by bots;
+                            # a left-out option keeps the index's last value)
 uv run repolore refresh     # ingest, then build with the index's recorded settings; one refresh at a time
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
@@ -141,9 +141,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
 - `embedding/` has the `Embedder` protocol and `LocalEmbedder` over sentence-transformers in float32. `build` embeds
   on the Apple Silicon GPU (MPS) when there is one, or on the device `REPOLORE_DEVICE` names; everything else, the
   MCP server's queries included, runs on the CPU. Both devices give the same vectors, so the embedding cache is shared.
-  The default model is `voyage-4-nano` (1024 dimensions, pinned to a reviewed revision because it runs the
-  model's own code); `bge-small` is the smaller alternative. An index records its model, and `embedder_for` picks
-  the matching one for search. The embedding and reranking models load from the Hugging Face cache and go to the
+  The model is `voyage-4-nano` (1024 dimensions, pinned to a reviewed revision because it runs the model's own
+  code). An index records its model, and `embedder_for` refuses any other, which needs a rebuild. The embedding and reranking models load from the Hugging Face cache and go to the
   Hub only to download a pinned revision that isn't cached yet. If that download fails, `hub.py` turns the error
   into a `ModelUnavailableError` that names the model and revision, which the CLI prints as one line and the MCP
   tool returns as its error; huggingface_hub's own retries still take a minute or two first. `count_tokens` reads
