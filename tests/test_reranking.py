@@ -41,7 +41,7 @@ def test_without_the_extra_it_says_how_to_install_it(monkeypatch: pytest.MonkeyP
         CrossEncoderReranker().rerank("q", [hit("a")])
 
     assert "\n" not in str(raised.value)
-    assert "repolore[rerank]" in str(raised.value)
+    assert '--torch-backend cpu "repolore-mcp[rerank]"' in str(raised.value)
 
 
 def hit(text: str) -> Hit:

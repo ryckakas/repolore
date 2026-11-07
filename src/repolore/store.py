@@ -107,7 +107,8 @@ def _with_vectors(db: sqlite3.Connection) -> sqlite3.Connection:
         db.close()
         raise StoreError(
             "This Python's sqlite3 can't load extensions, which the vector index needs. "
-            "Run repolore on a uv-managed Python: `uv python install 3.12`, then `uv sync --managed-python`."
+            "Reinstall repolore on uv's own Python: "
+            "`uv tool install --managed-python --python 3.12 --reinstall repolore-mcp`."
         )
     db.enable_load_extension(True)
     sqlite_vec.load(db)

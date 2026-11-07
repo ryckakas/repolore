@@ -1,3 +1,4 @@
 from importlib.metadata import version
 
-__version__ = version("repolore")
+DIST = "repolore-mcp"
+__version__ = version(DIST)

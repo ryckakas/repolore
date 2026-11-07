@@ -15,13 +15,15 @@ and macOS 14+ on Apple Silicon.
 1. Install the `repolore` and `repolore-mcp` commands:
 
    ```sh
-   uv tool install --managed-python --python 3.12 git+https://github.com/ryckakas/repolore
+   uv tool install --managed-python --python 3.12 repolore-mcp
    ```
 
-   `--managed-python` makes uv use its own Python build, which can load the SQLite extension the index needs; some
-   system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, run
-   `uv tool update-shell` and open a new terminal. The install takes about 160 MB. Reranking (`--rerank`, off by
-   default) needs PyTorch on top, about 900 MB more, and says how to add it when you ask for it.
+   The package is `repolore-mcp`: PyPI's `repolore` is a different project. `--managed-python` makes uv use its own
+   Python build, which can load the SQLite extension the index needs; some system builds, such as python.org's on
+   macOS, can't. If the commands aren't found afterwards, run `uv tool update-shell` and open a new terminal. The
+   install takes about 160 MB. Reranking (`--rerank`, off by default) needs PyTorch on top, about 900 MB more, and
+   says how to add it when you ask for it. To run the latest `main` instead of the last release, install
+   `git+https://github.com/ryckakas/repolore` the same way.
 
 2. Give it GitHub access. If you're logged in with the [GitHub CLI](https://cli.github.com/) (`gh auth login`),
    there's nothing to do. Otherwise set `REPOLORE_GITHUB_TOKEN` to a classic token with the `repo` scope, plus
@@ -82,8 +84,8 @@ To have Claude Code refresh once at the start of every session instead, add a `S
 }
 ```
 
-`uv tool upgrade repolore` updates repolore itself. On Windows, close the sessions using repolore (in Claude Code you
-can disable it in `/mcp` instead) and run `repolore server stop` first, since running programs keep their files
+`uv tool upgrade repolore-mcp` updates repolore itself. On Windows, close the sessions using repolore (in Claude Code
+you can disable it in `/mcp` instead) and run `repolore server stop` first, since running programs keep their files
 locked. Elsewhere, a session opened before the upgrade says so on its next search; reconnect repolore in your client
 (`/mcp` in Claude Code).
 
@@ -127,7 +129,7 @@ installed it asks `claude mcp get repolore`, which starts repolore to check that
    claude mcp add --scope user --transport stdio repolore -- repolore-mcp
    ```
 
-   For Codex and other clients, see [Other MCP clients](#other-mcp-clients).
+   For Codex and other clients, see [Other MCP clients](https://github.com/ryckakas/repolore#other-mcp-clients).
 
 ### Other MCP clients
 
@@ -137,6 +139,17 @@ portable `mcpServers` format (VS Code's own `mcp.json` calls the object `servers
 ```json
 { "mcpServers": { "repolore": { "command": "repolore-mcp" } } }
 ```
+
+A client can also launch it through `uvx`, without a tool install:
+
+```json
+{ "mcpServers": { "repolore": { "command": "uvx", "args": ["--managed-python", "--python", "3.12", "repolore-mcp"] } } }
+```
+
+The first launch downloads about 190 MB, which can take longer than a client waits for a server to start (30
+seconds in Claude Code), so run `uvx --managed-python --python 3.12 --from repolore-mcp repolore setup --no-register`
+once first: it fills uv's cache and sets repolore up. The other commands run the same way, as
+`uvx --managed-python --python 3.12 --from repolore-mcp repolore <command>`.
 
 For Codex, add it to `~/.codex/config.toml` with longer timeouts. `repolore setup` adds this entry when `codex` is on
 PATH, with an `env_vars` line for the variables below that are set when it runs:
@@ -163,7 +176,8 @@ starts inherit the environment of whichever session started it.
 ## What the experiments found
 
 Every retrieval choice was measured with `repolore eval` against 35 questions about the author's public repos, each
-with the sources expected to answer it. [EXPERIMENTS.md](EXPERIMENTS.md) has the full log. In short:
+with the sources expected to answer it.
+[EXPERIMENTS.md](https://github.com/ryckakas/repolore/blob/main/EXPERIMENTS.md) has the full log. In short:
 
 - **Plain vector search won.** Keyword search (BM25) alone was worse on every metric, because questions use plain
   words rather than the exact identifiers. Fusing the two rankings and reranking with a cross-encoder both gave
