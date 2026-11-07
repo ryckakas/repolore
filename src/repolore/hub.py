@@ -3,9 +3,7 @@ from contextlib import contextmanager
 
 import httpx
 
-
-class ModelUnavailableError(Exception):
-    pass
+from repolore.embedding import ModelUnavailableError
 
 
 @contextmanager

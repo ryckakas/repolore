@@ -11,9 +11,8 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol
 
 import numpy as np
 
-from repolore.embedding import Vectors
+from repolore.embedding import ModelUnavailableError, Vectors
 from repolore.embedding.model_files import ModelFile, ModelRelease, ensure, missing
-from repolore.hub import ModelUnavailableError
 from repolore.progress import Report, ignore
 
 if TYPE_CHECKING:

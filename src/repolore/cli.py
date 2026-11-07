@@ -23,6 +23,7 @@ from repolore.config import Config, load_config
 from repolore.discovery import discover
 from repolore.doctor import diagnose, github_access
 from repolore.documents import Document, DocumentKind
+from repolore.embedding import ModelUnavailableError
 from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, UnknownModelError, embedder_for
 from repolore.evals.harness import (
     METRICS,
@@ -35,7 +36,6 @@ from repolore.evals.harness import (
 )
 from repolore.evals.questions import QuestionKind, QuestionSet, load_questions
 from repolore.evals.runs import previous_run, run_record, save_run
-from repolore.hub import ModelUnavailableError
 from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import cached_documents
 from repolore.ingest import ingest as ingest_repos

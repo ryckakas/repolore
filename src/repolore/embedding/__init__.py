@@ -7,6 +7,10 @@ import numpy.typing as npt
 Vectors = npt.NDArray[np.float32]
 
 
+class ModelUnavailableError(Exception):
+    pass
+
+
 class Embedder(Protocol):
     @property
     def model_id(self) -> str: ...

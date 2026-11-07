@@ -51,7 +51,7 @@ uv run repolore eval        # score retrieval on the eval questions; --mode, --r
                             # --holdout
 uv run ruff format          # format
 uv run ruff check           # lint
-uv sync --extra rerank      # once, so pyright sees sentence-transformers' types
+uv sync --extra rerank      # instead of plain uv sync, so pyright sees sentence-transformers' types
 uv run pyright              # type-check (standard mode)
 uv run bonsai-lint          # cognitive complexity, threshold in bonsai-lint.toml
 uv run pytest               # offline tests; `live` tests are deselected

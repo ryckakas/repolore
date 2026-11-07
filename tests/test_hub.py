@@ -1,7 +1,8 @@
 import httpx
 import pytest
 
-from repolore.hub import ModelUnavailableError, downloading
+from repolore.embedding import ModelUnavailableError
+from repolore.hub import downloading
 
 REVISION = "5fb34e870f49f19e79c94d5e118f5ee730133279"
 

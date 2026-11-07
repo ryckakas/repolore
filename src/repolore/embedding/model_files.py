@@ -6,11 +6,12 @@ from pathlib import Path
 
 import httpx
 
-from repolore.hub import ModelUnavailableError
+from repolore.embedding import ModelUnavailableError
 from repolore.locks import hold
 from repolore.progress import Phase, Progress, Report, ignore
 
 MB = 1 << 20
+LOG_EVERY_BYTES = 100 * MB
 HASH_READ_BYTES = 1 << 24
 TIMEOUT = httpx.Timeout(60, connect=30)
 WAIT_FOR_THE_OTHER_DOWNLOAD = -1
@@ -76,6 +77,8 @@ def _download(
 
     def advance(count: int) -> None:
         nonlocal done
+        if (done + count) // LOG_EVERY_BYTES > done // LOG_EVERY_BYTES:
+            log.info("downloaded %d of %d MB", (done + count) // MB, total // MB)
         done += count
         report(Progress(phase=Phase.DOWNLOAD, done=done // MB, total=total // MB))
 
@@ -85,8 +88,12 @@ def _download(
             log.info("downloading %s, %d MB", file.name, file.size // MB)
             try:
                 _fetch(client, f"{url}/{file.name}", folder / file.name, file, advance)
-            except (httpx.HTTPError, OSError) as error:
+            except httpx.HTTPError as error:
                 raise ModelUnavailableError(_failure(file, f"{url}/{file.name}", folder, error)) from error
+            except OSError as error:
+                raise ModelUnavailableError(
+                    f"{file.name} couldn't be written to {folder}: {_reason(error)}."
+                ) from error
 
 
 def _fetch(client: httpx.Client, url: str, target: Path, file: ModelFile, advance: Callable[[int], None]) -> None:
@@ -126,8 +133,11 @@ def _resumed(partial: Path, file: ModelFile) -> "tuple[hashlib._Hash, int]":
 
 
 def _failure(file: ModelFile, url: str, folder: Path, error: Exception) -> str:
-    reason = next(iter(str(error).strip().splitlines()), type(error).__name__).rstrip(".")
     return (
-        f"{file.name} couldn't be downloaded from {url}: {reason}. "
+        f"{file.name} couldn't be downloaded from {url}: {_reason(error)}. "
         f"It needs access to github.com; behind a proxy that blocks it, put the file in {folder} by hand."
     )
+
+
+def _reason(error: Exception) -> str:
+    return next(iter(str(error).strip().splitlines()), type(error).__name__).rstrip(".")

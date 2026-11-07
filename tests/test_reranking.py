@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 import pytest
 
 from repolore import reranking
-from repolore.hub import ModelUnavailableError
+from repolore.embedding import ModelUnavailableError
 from repolore.reranking import CrossEncoderReranker
 from repolore.store import Hit
 

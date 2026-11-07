@@ -16,9 +16,8 @@ from pydantic import AnyHttpUrl, BaseModel, Field
 
 from repolore import __version__
 from repolore.documents import DocumentKind
-from repolore.embedding import Embedder
+from repolore.embedding import Embedder, ModelUnavailableError
 from repolore.embedding.local import UnknownModelError, embedder_for
-from repolore.hub import ModelUnavailableError
 from repolore.instructions import INSTRUCTIONS, SEARCH
 from repolore.paths import AppPaths, resolve_paths
 from repolore.refresh import RefreshStatus, refresh_status, start_refresh

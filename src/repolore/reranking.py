@@ -4,7 +4,8 @@ from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
-from repolore.hub import ModelUnavailableError, downloading
+from repolore.embedding import ModelUnavailableError
+from repolore.hub import downloading
 from repolore.store import Hit
 
 if TYPE_CHECKING:

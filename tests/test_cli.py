@@ -22,8 +22,8 @@ from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
 from repolore.documents import Document
+from repolore.embedding import ModelUnavailableError
 from repolore.embedding.local import VOYAGE_NANO, LocalModel
-from repolore.hub import ModelUnavailableError
 from repolore.locks import hold
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report

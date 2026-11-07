@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -6,9 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from repolore.embedding import model_files
+from repolore.embedding import ModelUnavailableError, model_files
 from repolore.embedding.model_files import ModelFile, ModelRelease, ensure, missing
-from repolore.hub import ModelUnavailableError
 from repolore.progress import Phase, Progress
 
 BASE = "https://github.com/someone/models/releases/download/tiny-1"
@@ -141,6 +141,17 @@ def test_a_not_found_fails_in_one_line_naming_the_url_and_the_folder(tmp_path: P
     assert str(RELEASE.folder(tmp_path)) in message
 
 
+def test_a_file_that_cant_be_written_blames_the_folder_not_the_network(tmp_path: Path, github: FakeGitHub) -> None:
+    folder = folder_of(tmp_path)
+    (folder / "tiny.onnx.partial").mkdir()
+
+    with pytest.raises(ModelUnavailableError) as raised:
+        ensure(RELEASE, [RELEASE.graph], tmp_path, transport=github.transport)
+
+    assert str(raised.value).startswith(f"tiny.onnx couldn't be written to {folder}: ")
+    assert "github.com" not in str(raised.value)
+
+
 def failing_after(content: bytes) -> Callable[[httpx.Request], httpx.Response]:
     def stream() -> Iterator[bytes]:
         yield content
@@ -243,6 +254,21 @@ def test_progress_is_reported_in_megabytes_up_to_the_total(
     assert {report.phase for report in reports} == {Phase.DOWNLOAD}
     assert reports[-1] == Progress(phase=Phase.DOWNLOAD, done=7, total=7)
     assert str(reports[-1]) == "download 7 of 7 MB"
+
+
+def test_a_long_download_logs_its_progress_every_so_often(
+    tmp_path: Path, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(model_files, "MB", 10)
+    monkeypatch.setattr(model_files, "LOG_EVERY_BYTES", 300)
+
+    with caplog.at_level(logging.INFO, logger=model_files.__name__):
+        ensure(RELEASE, [RELEASE.weights], tmp_path, transport=github.transport)
+
+    assert [record.getMessage() for record in caplog.records if record.getMessage().startswith("downloaded")] == [
+        "downloaded 30 of 70 MB",
+        "downloaded 60 of 70 MB",
+    ]
 
 
 def test_a_resumed_download_counts_what_it_already_has(

@@ -13,9 +13,8 @@ from mcp.types import CallToolResult, TextContent
 from repolore import __version__, mcp_server
 from repolore.chunking import Chunk, chunk_document
 from repolore.documents import Document
-from repolore.embedding import Embedder
+from repolore.embedding import Embedder, ModelUnavailableError
 from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, UnknownModelError
-from repolore.hub import ModelUnavailableError
 from repolore.mcp_server import READ_CHARS, TEXT_CHARS, create_server, preload
 from repolore.paths import AppPaths
 from repolore.progress import Phase, Progress

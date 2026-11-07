@@ -14,10 +14,9 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 
-from repolore.embedding import local
+from repolore.embedding import ModelUnavailableError, local
 from repolore.embedding.local import VOYAGE_NANO, LocalEmbedder, LocalModel, UnknownModelError, embedder_for, pool
 from repolore.embedding.model_files import ModelFile, ModelRelease
-from repolore.hub import ModelUnavailableError
 from repolore.paths import resolve_paths
 
 FIXTURES = Path(__file__).parent / "fixtures"
