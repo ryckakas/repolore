@@ -130,7 +130,13 @@ jobs:
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
       - run: '"$RUNNER_TEMP/actionlint"'
-      - run: shellcheck .githooks/*
+      - run: shellcheck .githooks/* install.sh
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $errors = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Error
+          $errors
+          if ($errors) { exit 1 }
 
   # Known advisories in uv.lock. Not a required check: an advisory published overnight would
   # otherwise block every pull request, related or not. `uv audit` is still a preview feature.

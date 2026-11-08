@@ -72,7 +72,8 @@ required status check on `main`, except `audit`:
 - `test (ubuntu-latest)`, `test (windows-latest)`, `test (macos-latest)`: pytest with the coverage floor.
 - `build`: builds the wheel and runs the installed `repolore` from it.
 - `typos`: spelling.
-- `zizmor`, `actionlint`: workflow security and correctness, and shellcheck over `.githooks/`.
+- `zizmor`, `actionlint`: workflow security and correctness, shellcheck over `.githooks/` and `install.sh`, and
+  PSScriptAnalyzer over `install.ps1`.
 - `audit`: `uv audit`. It runs on every PR but isn't required.
 
 CodeQL (Python and Actions) runs from `.github/workflows/codeql.yml`, not GitHub's default setup,
@@ -263,6 +264,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   result gives the old settings plus the entry, keeps one `<file>.repolore-backup` from before its first change, and
   replaces the file atomically, following a symlink and keeping its mode.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
+- `install.sh` and `install.ps1` install uv if it's missing, install or upgrade repolore, and run `repolore setup` with
+  their arguments. They're served raw from `main`, so a merge reaches users at once. `uv tool upgrade` is the only way
+  to update an existing install, because every form of `uv tool install` drops an installed extra. Under `curl | sh`
+  stdin is the script, so children get `/dev/null` and `setup` gets `/dev/tty`; `install.ps1` throws instead of
+  exiting, which would close the terminal under `iex`.
 - `.claude-plugin/marketplace.json` makes the repo a Claude Code plugin marketplace whose one plugin is
   `plugins/repolore/`: `.mcp.json` registers `repolore-mcp`, and `hooks/hooks.json` runs `repolore session-start`
   (exec form, async) when a session starts. The hook passes no `${user_config.*}`, because Claude Code fails a hook
