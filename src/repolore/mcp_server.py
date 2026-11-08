@@ -40,6 +40,10 @@ log = logging.getLogger(__name__)
 
 TEXT_CHARS = 1500
 READ_CHARS = 12_000
+RECOVERY_HINT = (
+    "`repolore refresh` in a terminal uses your own environment, "
+    "and `repolore server stop` lets the next client start the server"
+)
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 REFRESHES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 
@@ -175,7 +179,7 @@ def create_server(
         return Repos(
             repos=[Repo(repo=repo, chunks=chunks) for repo, chunks in counts.items()],
             built_at=built_at,
-            refresh=status,
+            refresh=_with_recovery_hint(status),
         )
 
     @server.tool(annotations=REFRESHES)
@@ -218,8 +222,15 @@ def _refresh_note(status: RefreshStatus) -> str:
     if status.running:
         return f" A refresh is running ({status.progress})." if status.progress else " A refresh is running."
     if status.ok is False:
-        return f" The last refresh failed: {status.error}"
+        return f" The last refresh failed: {_with_recovery_hint(status).error}"
     return ""
+
+
+def _with_recovery_hint(status: RefreshStatus) -> RefreshStatus:
+    """A failed refresh with what to try: it inherits the environment of whichever client started the shared server."""
+    if status.ok is not False:
+        return status
+    return status.model_copy(update={"error": f"{status.error} ({RECOVERY_HINT})"})
 
 
 def _result(hit: Hit) -> Result:

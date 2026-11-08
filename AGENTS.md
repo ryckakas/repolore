@@ -8,15 +8,16 @@ this repository. `CLAUDE.md` is a symlink to this file.
 `repolore` is a hand-built RAG pipeline over one person's engineering history on GitHub: PR bodies,
 review threads, issues, PR-less commits, repo markdown (`README`, `AGENTS.md`, `docs/**`) and local
 `.plans/` documents. It is searched from a Typer CLI (`search`, `eval`) and served read-only
-to Claude Code through a stdio MCP server. Claude Code writes the answers; repolore itself calls no LLM.
+to MCP clients such as Claude Code and Codex through a stdio server. The client writes the answers; repolore itself
+calls no LLM.
 
 It is a **learning project first**: every stage (fetch, chunk, embed, retrieve, generate,
 evaluate) is written by hand so it stays visible. No LangChain, LlamaIndex, RAGAS or other
 RAG/eval frameworks. Prefer the approach that exposes how a stage works over one that hides it.
 
-It runs locally for a single user. Other people use it by running their own copy (`uv tool install
-repolore-mcp` from PyPI + `repolore setup`, which runs `claude mcp add`, or the Claude Code plugin in
-`plugins/repolore/`, as in the README) with their own GitHub token. No model API key
+It runs locally for a single user. Other people use it by running their own copy (`install.sh` or `install.ps1`, or
+`uv tool install repolore-mcp` from PyPI and `repolore setup`, which registers it with the MCP clients it finds, or the
+Claude Code plugin in `plugins/repolore/`, as in the README) with their own GitHub token. No model API key
 is needed: embeddings run locally. There is no hosted service and no GitHub App.
 
 ## Commands

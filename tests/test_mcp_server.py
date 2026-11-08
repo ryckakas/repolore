@@ -400,8 +400,20 @@ async def test_without_an_index_list_repos_says_how_a_refresh_is_going(
     assert all(result.is_error for result in results)
     assert texts[0].endswith("to build it. A refresh is running.")
     assert texts[1].endswith("to build it. A refresh is running (embed 120 of 5000).")
-    assert texts[2].endswith("to build it. The last refresh failed: no token")
+    assert texts[2].endswith(f"to build it. The last refresh failed: no token ({mcp_server.RECOVERY_HINT})")
     assert texts[3].endswith("to build it.")
+
+
+async def test_list_repos_says_how_to_recover_from_a_failed_refresh(
+    index_file: Path, fake_embedder: FakeEmbedder
+) -> None:
+    async with Client(server(index_file, fake_embedder)) as client:
+        with pytest.raises(ValueError, match="no token"), refreshing(index_file.parent.parent):
+            raise ValueError("no token")
+        result = await client.call_tool("list_repos", {})
+
+    assert result.structured_content is not None
+    assert result.structured_content["refresh"]["error"] == f"no token ({mcp_server.RECOVERY_HINT})"
 
 
 async def test_list_repos_says_how_far_a_running_refresh_has_got(index_file: Path, fake_embedder: FakeEmbedder) -> None:
