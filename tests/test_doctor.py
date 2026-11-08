@@ -12,6 +12,7 @@ from conftest import FakeEmbedder
 from repolore import __version__, doctor
 from repolore.chunking import Chunk
 from repolore.clients import PLUGIN_SERVER, Entry, McpClient, RegistrationError
+from repolore.config import Config, LocalFolder
 from repolore.doctor import (
     Check,
     config_check,
@@ -20,6 +21,7 @@ from repolore.doctor import (
     github_access,
     github_check,
     index_check,
+    local_documents_checks,
     model_check,
     refresh_check,
     registration_check,
@@ -33,6 +35,7 @@ from repolore.paths import AppPaths
 from repolore.progress import Phase, Progress
 from repolore.refresh import LOCK_FILE, STATUS_FILE, RefreshStatus
 from repolore.server_state import Discovery, ServerFiles, write_discovery
+from repolore.setup import write_config
 from repolore.sources import github
 from repolore.sources.github import GitHubClient, GitHubError
 from repolore.store import StoreError, connect, write_index
@@ -589,3 +592,197 @@ def test_diagnose_skips_clients_that_arent_installed(data_paths: AppPaths) -> No
     checks = list(diagnose(data_paths, "default", github_answering(), clients=[absent]))
 
     assert checks[-1].name == "shared server"
+
+
+def checkout_with_plan(root: Path, name: str = "repo") -> Path:
+    directory = root / name
+    (directory / ".plans").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(directory)], check=True)
+    url = f"https://github.com/octo/{name}.git"
+    subprocess.run(["git", "-C", str(directory), "remote", "add", "origin", url], check=True)
+    (directory / ".plans" / "plan.md").write_text("# Plan", encoding="utf-8")
+    return directory
+
+
+def local_checks(tmp_path: Path, config: Config) -> list[Check]:
+    config_file = tmp_path / "repolore.toml"
+    write_config(config_file, config)
+    return list(local_documents_checks(config_file))
+
+
+PLANS = ".plans/**/*.md"
+
+
+def test_no_local_settings_means_no_local_checks(tmp_path: Path) -> None:
+    assert local_checks(tmp_path, Config(include=["me/*"])) == []
+
+
+def test_no_config_file_means_no_local_checks(tmp_path: Path) -> None:
+    assert list(local_documents_checks(tmp_path / "repolore.toml")) == []
+
+
+def test_an_unreadable_config_is_left_to_the_config_check(tmp_path: Path) -> None:
+    config_file = tmp_path / "repolore.toml"
+    config_file.write_text("include = [", encoding="utf-8")
+
+    assert list(local_documents_checks(config_file)) == []
+
+
+def test_checkouts_report_their_files(tmp_path: Path) -> None:
+    root = tmp_path / "code"
+    checkout_with_plan(root, "one")
+    checkout_with_plan(root, "two")
+
+    checks = local_checks(tmp_path, Config(local_roots=[root], local_patterns=[PLANS]))
+
+    assert checks == [Check("local checkouts", True, "2 files in 2 checkouts")]
+
+
+def test_one_checkout_with_one_file_is_singular(tmp_path: Path) -> None:
+    checkout_with_plan(tmp_path / "code")
+
+    checks = local_checks(tmp_path, Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS]))
+
+    assert checks[0].detail == "1 file in 1 checkout"
+
+
+def test_roots_without_patterns_warn_with_the_line_to_add(tmp_path: Path) -> None:
+    check = local_checks(tmp_path, Config(local_roots=[tmp_path]))[0]
+
+    assert (check.ok, check.warning) == (True, True)
+    assert "no local_patterns" in check.detail
+    assert check.fix == 'add local_patterns = [".plans/**/*.md"] to repolore.toml'
+
+
+def test_patterns_without_roots_warn(tmp_path: Path) -> None:
+    check = local_checks(tmp_path, Config(local_patterns=[PLANS]))[0]
+
+    assert (check.ok, check.warning) == (True, True)
+    assert "no local_roots" in check.detail
+
+
+def test_a_pattern_no_checkout_matches_warns_and_names_it(tmp_path: Path) -> None:
+    checkout_with_plan(tmp_path / "code")
+
+    config = Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS, "docs/adr/*.md"])
+    check = local_checks(tmp_path, config)[0]
+
+    assert (check.ok, check.warning) == (True, True)
+    assert check.detail == "1 file in 1 checkout; no selected GitHub checkout matches docs/adr/*.md"
+
+
+def test_a_pattern_only_some_checkouts_match_doesnt_warn(tmp_path: Path) -> None:
+    checkout_with_plan(tmp_path / "code", "one")
+    with_adr = checkout_with_plan(tmp_path / "code", "two")
+    (with_adr / "docs").mkdir()
+    (with_adr / "docs" / "adr.md").write_text("# ADR", encoding="utf-8")
+
+    checks = local_checks(tmp_path, Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS, "docs/*.md"]))
+
+    assert checks == [Check("local checkouts", True, "3 files in 2 checkouts")]
+
+
+def test_no_checkouts_at_all_warns_about_every_pattern(tmp_path: Path) -> None:
+    (tmp_path / "code").mkdir()
+
+    check = local_checks(tmp_path, Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS]))[0]
+
+    assert check.warning
+    assert check.detail == f"0 files in 0 checkouts; no selected GitHub checkout matches {PLANS}"
+
+
+def test_a_checkout_over_the_limit_fails_naming_it(tmp_path: Path) -> None:
+    repo = checkout_with_plan(tmp_path / "code")
+    (repo / ".plans" / "more.md").write_text("# More", encoding="utf-8")
+
+    config = Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS], max_local_files=1)
+    check = local_checks(tmp_path, config)[0]
+
+    assert not check.ok
+    assert not check.warning
+    assert check.detail == f"more than 1 files in {repo}"
+    assert "max_local_files" in (check.fix or "")
+
+
+def test_a_checkout_left_out_by_the_globs_isnt_counted_or_limited(tmp_path: Path) -> None:
+    checkout_with_plan(tmp_path / "code", "kept")
+    left_out = checkout_with_plan(tmp_path / "code", "other")
+    (left_out / ".plans" / "more.md").write_text("# More", encoding="utf-8")
+
+    config = Config(include=["octo/kept"], local_roots=[tmp_path / "code"], local_patterns=[PLANS], max_local_files=1)
+
+    assert local_checks(tmp_path, config) == [Check("local checkouts", True, "1 file in 1 checkout")]
+
+
+def test_exactly_the_limit_passes(tmp_path: Path) -> None:
+    checkout_with_plan(tmp_path / "code")
+
+    config = Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS], max_local_files=1)
+
+    assert local_checks(tmp_path, config)[0].ok
+
+
+def test_a_missing_root_is_not_logged_again(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    config = Config(local_roots=[tmp_path / "gone"], local_patterns=[PLANS])
+
+    local_checks(tmp_path, config)
+
+    assert "doesn't exist" not in caplog.text
+
+
+def test_a_folder_reports_its_files(tmp_path: Path) -> None:
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "a.md").write_text("# A", encoding="utf-8")
+    (tmp_path / "notes" / "b.md").write_text("# B", encoding="utf-8")
+
+    checks = local_checks(tmp_path, Config(local_folders=[LocalFolder(name="notes", path=tmp_path / "notes")]))
+
+    assert checks == [Check("local/notes", True, f"2 files in {(tmp_path / 'notes').resolve()}")]
+
+
+def test_a_folder_matching_nothing_warns(tmp_path: Path) -> None:
+    (tmp_path / "notes").mkdir()
+
+    check = local_checks(tmp_path, Config(local_folders=[LocalFolder(name="notes", path=tmp_path / "notes")]))[0]
+
+    assert (check.ok, check.warning) == (True, True)
+    assert "no markdown matches" in check.detail
+
+
+def test_a_missing_folder_fails_without_logging_it_again(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    gone = tmp_path / "gone"
+
+    check = local_checks(tmp_path, Config(local_folders=[LocalFolder(name="notes", path=gone)]))[0]
+
+    assert not check.ok
+    assert check.detail == f"not found: {gone}"
+    assert check.fix == "fix its path in repolore.toml"
+    assert "doesn't exist" not in caplog.text
+
+
+def test_a_folder_over_the_limit_fails(tmp_path: Path) -> None:
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "a.md").write_text("# A", encoding="utf-8")
+    (tmp_path / "notes" / "b.md").write_text("# B", encoding="utf-8")
+
+    folder = LocalFolder(name="notes", path=tmp_path / "notes")
+    check = local_checks(tmp_path, Config(local_folders=[folder], max_local_files=1))[0]
+
+    assert not check.ok
+    assert "more than 1 files" in check.detail
+
+
+def test_every_folder_gets_its_own_check_after_the_checkouts(tmp_path: Path) -> None:
+    folders = [LocalFolder(name="a", path=tmp_path), LocalFolder(name="b", path=tmp_path)]
+
+    checks = local_checks(tmp_path, Config(local_roots=[tmp_path], local_folders=folders))
+
+    assert [check.name for check in checks] == ["local checkouts", "local/a", "local/b"]
+
+
+def test_diagnose_reports_local_documents_right_after_the_config(data_paths: AppPaths, tmp_path: Path) -> None:
+    write_config(data_paths.config_file, Config(local_folders=[LocalFolder(name="notes", path=tmp_path)]))
+
+    names = [check.name for check in diagnose(data_paths, "default", github_answering(), clients=[])]
+
+    assert names[names.index("repolore.toml") + 1] == "local/notes"

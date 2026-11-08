@@ -386,8 +386,8 @@ def _recorded_settings(index_file: Path) -> BuildSettings:
 
 @app.command()
 def doctor(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
-    """Check the setup and say how to fix what's wrong: sqlite-vec, GitHub access, repolore.toml, the index, the model,
-    the last refresh, the shared server and the MCP clients that have repolore registered.
+    """Check the setup and say how to fix what's wrong: sqlite-vec, GitHub access, repolore.toml, local documents,
+    the index, the model, the last refresh, the shared server and the MCP clients that have repolore registered.
 
     Exits with 1 when a check fails. It makes one GitHub request, and Claude Code starts repolore to check it.
     """

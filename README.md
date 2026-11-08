@@ -210,8 +210,9 @@ The index and the raw GitHub responses live in the data directory that `repolore
 private repos' content, so treat that folder like the repos themselves.
 
 When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
-fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
-shared server and each MCP client it finds. A client that's installed without repolore is only a warning; one with
+fails: GitHub access and the token's scopes, `repolore.toml`, what each local source matches, the index, the
+embedding model, the last refresh, the shared server and each MCP client it finds. A client that's installed without
+repolore is only a warning; one with
 two registrations fails, naming how to remove each. `doctor` makes one GitHub request, and for a single Claude Code
 registration it asks `claude mcp get`, which starts repolore to check that it connects. Other clients can't be asked,
 so they pass as "connection not checked".

@@ -1,3 +1,4 @@
+import os
 import platform
 import sqlite3
 import subprocess
@@ -12,13 +13,14 @@ from pydantic import ValidationError
 
 from repolore import __version__
 from repolore.clients import CLIENTS, Entry, McpClient, RegistrationError, is_connected, repolore_entries
-from repolore.config import load_config
+from repolore.config import Config, LocalFolder, load_config
 from repolore.embedding.engines import build_engine
 from repolore.embedding.local import VOYAGE_NANO, is_downloaded, spec_for
 from repolore.indexing import WHOLE
 from repolore.paths import AppPaths
 from repolore.refresh import LOG_FILE, refresh_status
 from repolore.server_state import ServerFiles, connected_relays, is_running, read_discovery
+from repolore.setup import PLANS_PATTERN
 from repolore.sources.github import (
     TOKEN_ENV,
     GitHubClient,
@@ -28,11 +30,15 @@ from repolore.sources.github import (
     resolve_token,
     token_source,
 )
+from repolore.sources.local_docs import LocalFiles, find_checkouts, folder_files
 from repolore.store import StoreError, connect_read_only, index_settings, repo_counts, vector_version
 
 REFRESH_FIX = "run `repolore refresh`"
 CONNECTION_FIX = "`repolore server stop`, then reconnect repolore in the client; `repolore server status` names its log"
 CLIENT_ERRORS = (OSError, subprocess.SubprocessError, RegistrationError)
+CONFIG_ERRORS = (tomllib.TOMLDecodeError, ValidationError, UnicodeDecodeError)
+LIMIT_FIX = "narrow the patterns or raise max_local_files in repolore.toml"
+PATTERNS_FIX = "check them; `repolore repos` shows what each checkout matches"
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,7 @@ def diagnose(
     yield vectors_check()
     yield github_check(connect)
     yield config_check(paths.config_file)
+    yield from local_documents_checks(paths.config_file)
     yield index_check(index_file)
     yield model_check(index_file, paths.models_dir)
     yield engine_check()
@@ -134,7 +141,7 @@ def config_check(config_file: Path) -> Check:
         return Check(name, True, "none, so every discovered repo is in")
     try:
         config = load_config(config_file)
-    except (tomllib.TOMLDecodeError, ValidationError, UnicodeDecodeError) as error:
+    except CONFIG_ERRORS as error:
         reason = " ".join(line.strip() for line in str(error).splitlines())
         return Check(name, False, f"invalid: {reason}", "fix it; the README's quickstart shows the format")
     counts = [_count(len(config.include), "include glob"), _count(len(config.exclude), "exclude glob")]
@@ -142,6 +149,64 @@ def config_check(config_file: Path) -> Check:
     if missing := [str(root) for root in config.local_roots if not root.expanduser().is_dir()]:
         return Check(name, False, f"{detail}; not found: {', '.join(missing)}", "fix local_roots")
     return Check(name, True, f"{detail}; `repolore repos` shows what they select")
+
+
+def local_documents_checks(config_file: Path) -> Iterator[Check]:
+    """What the local settings match, with no GitHub access; config_check reports a config that can't be read."""
+    try:
+        config = load_config(config_file)
+    except CONFIG_ERRORS:
+        return
+    if config.local_roots or config.local_patterns:
+        yield _checkouts_check(config)
+    for folder in config.local_folders:
+        yield _folder_check(folder, config.max_local_files)
+
+
+def _checkouts_check(config: Config) -> Check:
+    name = "local checkouts"
+    if not config.local_patterns:
+        fix = f'add local_patterns = ["{PLANS_PATTERN}"] to repolore.toml'
+        return Check(name, True, "local_roots is set but no local_patterns, so nothing in them is indexed", fix, True)
+    if not config.local_roots:
+        return Check(name, True, "local_patterns is set but no local_roots to search", "add local_roots", warning=True)
+    # A missing root is config_check's to report, and looking in it would only log that again.
+    existing = [root for root in config.local_roots if os.path.isdir(root.expanduser())]
+    found = find_checkouts(config.model_copy(update={"local_roots": existing}))
+    checkouts = [files for repo, files in found.items() if config.selects(repo)]
+    counts = [len(files.matches()) for files in checkouts]
+    if over := [files.root for files, count in zip(checkouts, counts, strict=True) if count > files.limit]:
+        return Check(name, False, f"more than {config.max_local_files} files in {over[0]}", LIMIT_FIX)
+    detail = f"{_count(sum(counts), 'file')} in {_count(len(checkouts), 'checkout')}"
+    if unmatched := _unmatched_patterns(config.local_patterns, checkouts):
+        return Check(
+            name,
+            True,
+            f"{detail}; no selected GitHub checkout matches {', '.join(unmatched)}",
+            PATTERNS_FIX,
+            warning=True,
+        )
+    return Check(name, True, detail)
+
+
+def _unmatched_patterns(patterns: list[str], checkouts: list[LocalFiles]) -> list[str]:
+    return [
+        pattern
+        for pattern in patterns
+        if not any(LocalFiles(files.root, (pattern,), limit=1).matches() for files in checkouts)
+    ]
+
+
+def _folder_check(folder: LocalFolder, limit: int) -> Check:
+    files = folder_files(folder, limit)
+    if files is None:
+        return Check(folder.repo, False, f"not found: {folder.path}", "fix its path in repolore.toml")
+    count = len(files.matches())
+    if count > limit:
+        return Check(folder.repo, False, f"more than {limit} files in {files.root}", LIMIT_FIX)
+    if count == 0:
+        return Check(folder.repo, True, f"no markdown matches in {files.root}", "check its path and patterns", True)
+    return Check(folder.repo, True, f"{_count(count, 'file')} in {files.root}")
 
 
 def _count(number: int, noun: str) -> str:

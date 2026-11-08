@@ -252,10 +252,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
   whatever the creation flags, so a short-lived intermediate starts the real process and exits before
   `spawn_detached` returns.
-- `doctor.py` is `repolore doctor`: sqlite-vec, GitHub access, `repolore.toml`, the index, its model files (by size,
+- `doctor.py` is `repolore doctor`: sqlite-vec, GitHub access, `repolore.toml`, what each local source matches, the index, its model files (by size,
   not hash), the last refresh, the shared server and the MCP clients' registrations. The GitHub check is its one
   request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
-  never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` finds
+  never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. A local folder that's missing or a source over
+  `max_local_files` fails; `local_roots` without `local_patterns`, or a pattern or folder that matches nothing, warns. `clients.py` finds
   every registration of repolore in each installed client from its configuration, by name or by the command it runs,
   without starting a server: Claude Code's user, local and project scopes plus `claude plugin list --json`, and the
   other clients' user files and those in the current folder. One registration is checked with `claude mcp get` on
