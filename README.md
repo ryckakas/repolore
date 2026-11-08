@@ -8,8 +8,8 @@
 then buried.*
 
 RAG over your own engineering history on GitHub: PRs, review threads, issues, commits and docs, searchable from a
-CLI and from Claude Code over MCP. It answers questions like "why did we drop the retry middleware?" with the
-passages that explain it and links to them.
+CLI and from any MCP client, such as Claude Code or Codex. It answers questions like "why did we drop the retry
+middleware?" with the passages that explain it and links to them.
 
 [![CI](https://github.com/ryckakas/repolore/actions/workflows/ci.yml/badge.svg)](https://github.com/ryckakas/repolore/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/repolore-mcp?color=3775A9&logo=pypi&logoColor=white)](https://pypi.org/project/repolore-mcp/)
@@ -22,8 +22,9 @@ passages that explain it and links to them.
   repos' markdown, and the `.plans/` folders in your local checkouts. The reasons behind code live there.
 - **Everything stays on your machine.** It uses your own GitHub token and embeds locally, so no model API key is
   needed, and nothing leaves your machine except GitHub API calls and the one-time model download from GitHub.
-- **Made for Claude Code.** Sessions get `search`, `read`, `list_repos` and `refresh` tools and answer with links
-  to the sources. Codex and other MCP clients work too.
+- **Works in your MCP client.** Sessions get `search`, `read`, `list_repos` and `refresh` tools and answer with links
+  to the sources. `repolore setup` registers it with the clients it finds, from Claude Code and Codex to Cursor and
+  VS Code.
 - **One model for every session.** Each session runs a small relay, about 70 MB; one shared server holds the model.
 - **Stays current cheaply.** A refresh fetches only what changed on GitHub and embeds only the chunks that changed.
 - **Every default was measured.** Each retrieval choice went through `repolore eval` against a fixed question set,
@@ -33,12 +34,26 @@ passages that explain it and links to them.
 
 ## Install
 
-You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a GitHub login. It runs on Linux, Windows
-and macOS 14+ on Apple Silicon.
+You need a GitHub login. It runs on Linux, Windows and macOS 14+ on Apple Silicon. On Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryckakas/repolore/main/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/ryckakas/repolore/main/install.ps1 | iex
+```
+
+Both scripts ([install.sh](https://github.com/ryckakas/repolore/blob/main/install.sh),
+[install.ps1](https://github.com/ryckakas/repolore/blob/main/install.ps1)) install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) if it's missing, install or upgrade repolore, and run
+`repolore setup`. To do it by hand, with uv already there:
 
 ```sh
 uv tool install --managed-python --python 3.12 repolore-mcp   # the repolore and repolore-mcp commands
-repolore setup                                                # pick repos, register with Claude Code, first refresh
+repolore setup                                                # pick repos, register your MCP clients, first refresh
 ```
 
 The package is `repolore-mcp`: PyPI's `repolore` is a different project.
@@ -48,12 +63,23 @@ Otherwise set `REPOLORE_GITHUB_TOKEN` to a classic token with the `repo` scope, 
 repos. Organizations with SSO also need the token authorized for them.
 
 `repolore setup` checks the GitHub token, lists the repos it found and asks which to index, writes your pick to
-`repolore.toml`, registers repolore with Claude Code and Codex when they're on PATH, and starts the first refresh in
-the background. It finds the repos you own or can read as a collaborator or organization member, plus your own PRs
-and issues in other people's repos. Every question has a flag, which `repolore setup --help` lists, so it can run
-without asking: `repolore setup --include "you/*" --register --refresh` (plus `--replace-config` when
-`repolore.toml` exists). In Claude Code, the plugin can register it instead and adds a refresh at session start;
-see "The Claude Code plugin" below.
+`repolore.toml`, offers to register repolore with each
+[MCP client](https://github.com/ryckakas/repolore#mcp-clients) it finds, and starts the first refresh in the
+background. It finds the repos you own or can read as a collaborator or organization member, plus your own PRs and
+issues in other people's repos. Replacing `repolore.toml` with a smaller pick removes the other repos from the index
+at the next refresh.
+
+Every question has a flag, which `repolore setup --help` lists, so it can run without asking:
+`repolore setup --include "you/*" --register --refresh`, plus `--replace-config` when `repolore.toml` exists, and
+`--clients claude,codex` to pick the clients. The install scripts pass their arguments on:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryckakas/repolore/main/install.sh | sh -s -- --include "you/*" --register --refresh
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/ryckakas/repolore/main/install.ps1))) --include "you/*" --register --refresh
+```
 
 The first refresh downloads the embedding model from GitHub, about 1.4 GB, and embeds everything on your machine,
 which takes a while for a large account, so start with a few repos. As a rough guide, 3,713 chunks took 22 minutes
@@ -62,58 +88,27 @@ to embed on a 12-core desktop CPU, after a 9-minute download. On Apple Silicon i
 uses.
 
 <details>
-<summary><b>The Claude Code plugin</b></summary>
-
-This repo is also a Claude Code plugin marketplace. Its plugin registers the MCP server and, when a session starts,
-refreshes the index in the background if the last refresh is at least 12 hours old. It needs repolore-mcp 0.3.0 or
-later installed as above. Install the plugin before running `repolore setup`, which then sees its server and leaves
-the registration to it:
-
-```text
-/plugin install repolore --marketplace ryckakas/repolore
-```
-
-That works in one step from Claude Code 2.1.275; on older versions, run `/plugin marketplace add ryckakas/repolore`,
-then `/plugin install repolore@repolore`. The plugin's tools are named `mcp__plugin_repolore_repolore__search` and so
-on.
-
-The plugin's `refresh_hours` option sets the interval, and `0` turns the refresh off: `/plugin`, then Installed,
-repolore and Configure options. The refresh skips until `repolore setup` has built the index, and while another
-refresh runs.
-
-If Claude Code also has repolore registered for every project with the same command, it uses that registration,
-leaves the plugin's server out, and the tools keep their `mcp__repolore__` names. A registration with another command,
-such as a checkout run through `uv run`, runs beside the plugin's, and Claude sees every tool twice; keep one, with
-`claude mcp remove repolore --scope user` or by disabling the plugin.
-
-Claude Code doesn't update plugins from other people's marketplaces by itself: `/plugin marketplace update repolore`
-fetches the latest plugin, or turn on auto-update for the marketplace in `/plugin` under Marketplaces. The plugin
-doesn't update repolore itself; `uv tool upgrade repolore-mcp` does.
-
-</details>
-
-<details>
 <summary><b>How the install works: Python, PyTorch, the latest main and uvx</b></summary>
 
 `--managed-python` makes uv use its own Python build, which can load the SQLite extension the index needs; some
-system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, run
-`uv tool update-shell` and open a new terminal. The install takes about 160 MB.
+system builds, such as python.org's on macOS, can't. If the commands aren't found afterwards, open a new terminal;
+after a manual install, run `uv tool update-shell` first. The install takes about 160 MB.
 
-The first launch of each command compiles its Python code, which took about 25 seconds on Windows, close to Claude
-Code's 30-second wait for an MCP server; later launches take a few seconds. Adding `--compile-bytecode` to the
-install does that work up front instead. On some Windows machines uv then fails with "os error 1224"
+The first launch of each command compiles its Python code, which took about 25 seconds on Windows, close to the
+30 seconds Claude Code waits for an MCP server; later launches take a few seconds. Adding `--compile-bytecode` to a
+manual install does that work up front instead. On some Windows machines uv then fails with "os error 1224"
 ([astral-sh/uv#14017](https://github.com/astral-sh/uv/issues/14017)); install without it there.
 
 Reranking (`--rerank`, off by default) needs PyTorch on top, about 900 MB more, and says how to add it when you ask
 for it.
 
-To run the latest `main` instead of the last release, install `git+https://github.com/ryckakas/repolore` the same
-way.
+To run the latest `main` instead of the last release, set `REPOLORE_INSTALL_FROM_GIT=1` for the install script
+(`curl … | REPOLORE_INSTALL_FROM_GIT=1 sh`, or `$env:REPOLORE_INSTALL_FROM_GIT = '1'` first in PowerShell), or install
+`git+https://github.com/ryckakas/repolore` by hand. Extras such as `rerank` have to be added again.
 
 Without a tool install, uvx runs it too:
 `uvx --managed-python --python 3.12 --from repolore-mcp repolore setup --no-register`, and the other commands the
-same way. See [Other MCP clients](https://github.com/ryckakas/repolore#other-mcp-clients) for launching the server
-like that.
+same way. See [MCP clients](https://github.com/ryckakas/repolore#mcp-clients) for launching the server like that.
 
 </details>
 
@@ -144,13 +139,12 @@ like that.
    repolore build    # embed and index; later runs embed only what changed
    ```
 
-3. Register the MCP server with Claude Code once:
+3. Register the MCP server with your client once; see
+   [MCP clients](https://github.com/ryckakas/repolore#mcp-clients). In Claude Code:
 
    ```sh
    claude mcp add --scope user --transport stdio repolore -- repolore-mcp
    ```
-
-   For Codex and other clients, see [Other MCP clients](https://github.com/ryckakas/repolore#other-mcp-clients).
 
 </details>
 
@@ -164,7 +158,7 @@ repolore doctor           # check every part of the setup, with the fix for each
 repolore server status    # the shared MCP server; `repolore server stop` stops it
 ```
 
-Or ask Claude Code in a new session. It gets `search`, `read`, `list_repos` and `refresh` tools and can answer
+Or ask your MCP client in a new session. It gets `search`, `read`, `list_repos` and `refresh` tools and can answer
 questions about your history with links to the sources. `search` cuts each passage at 1,500 characters, and `read`
 returns a source's whole text from the index, plans and private repos included, a page at a time.
 
@@ -186,12 +180,91 @@ from the session's own process, with its own copy of the model, as before.
 `repolore refresh` ingests what changed and rebuilds the index with the settings it was built with, and only one
 refresh runs at a time. Search keeps working meanwhile. An MCP client can do the same: the server's `refresh` tool
 starts one in the background, and `list_repos` says when the index was built, how the last refresh went and, while
-one runs, how far it has got (repos fetched, chunks embedded). Claude Code asks before the first call; to allow it
-for good, add `mcp__repolore__refresh` to `permissions.allow` in your Claude Code settings, or
-`mcp__plugin_repolore_repolore__refresh` when the plugin provides the server.
+one runs, how far it has got (repos fetched, chunks embedded). Nothing refreshes by itself, except in Claude Code,
+which can do it when a session starts; see [Claude Code](https://github.com/ryckakas/repolore#mcp-clients).
 
-The plugin also refreshes when a session starts and the last refresh is at least 12 hours old. Without the plugin, a
-`SessionStart` hook in `~/.claude/settings.json` does the same:
+The shared server, and the refreshes it starts, inherit the environment of whichever client started it. Claude Desktop
+never gets `REPOLORE_GITHUB_TOKEN`, for example, so if it started the server, a `refresh` tool call from any client can
+fail when you rely on that variable or on a `gh` the app can't find. Searches aren't affected. `repolore refresh` from
+a terminal uses your own environment, and `repolore server stop` lets the next client start the server.
+
+</details>
+
+<details>
+<summary><b>Upgrading, your data, and when something breaks</b></summary>
+
+Running the install script again, or `uv tool upgrade repolore-mcp`, updates repolore and keeps its extras. On Windows,
+close the sessions using repolore first (in Claude Code you can disable it in `/mcp` instead), since running programs
+keep their files locked; after a manual upgrade, run `repolore server stop` too. Elsewhere, a session opened before the
+upgrade says so on its next search; reconnect repolore in your client (`/mcp` in Claude Code).
+
+The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
+private repos' content, so treat that folder like the repos themselves.
+
+When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
+fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
+shared server and each MCP client it finds. A client that's installed without repolore is only a warning; one with
+two registrations fails, naming how to remove each. `doctor` makes one GitHub request, and for a single Claude Code
+registration it asks `claude mcp get`, which starts repolore to check that it connects. Other clients can't be asked,
+so they pass as "connection not checked".
+
+</details>
+
+## MCP clients
+
+`repolore-mcp` is a standard stdio MCP server. `repolore setup` offers to register it, for every project, with each of
+these it finds; `--clients` picks some by key:
+
+| Client | `--clients` | Registered in |
+|---|---|---|
+| Claude Code | `claude` | `claude mcp add` at user scope, or the plugin below |
+| Codex | `codex` | `~/.codex/config.toml` |
+| Gemini CLI | `gemini` | `~/.gemini/settings.json` |
+| Claude Desktop | `claude-desktop` | `claude_desktop_config.json` |
+| Cursor | `cursor` | `~/.cursor/mcp.json` |
+| VS Code | `vscode` | `mcp.json` in its user folder |
+| Zed | `zed` | its `settings.json` |
+| OpenCode | `opencode` | `opencode.json` or `opencode.jsonc` |
+| Devin CLI | `devin` | `devin mcp add` at user scope |
+
+Claude Code and Codex have been run end to end. The others follow each client's documentation, so
+[open an issue](https://github.com/ryckakas/repolore/issues) if one doesn't work.
+
+A client that already has repolore, under any name, is left alone. Adding to another app's settings file leaves the
+rest of it as it was, comments included, and keeps a `<file>.repolore-backup` from before the first change. Apps started
+from a dock or the Start menu get the absolute path to `repolore-mcp`, because their PATH may not have uv's tool folder.
+A token only ever goes in as a reference to the variable, for the clients that can expand one.
+
+<details>
+<summary><b>Claude Code</b></summary>
+
+This repo is also a Claude Code plugin marketplace. Its plugin registers the MCP server and, when a session starts,
+refreshes the index in the background if the last refresh is at least 12 hours old. It needs repolore-mcp 0.3.0 or
+later. Install the plugin before running `repolore setup` or the install script, which then sees its server and leaves
+the registration to it:
+
+```text
+/plugin install repolore --marketplace ryckakas/repolore
+```
+
+That works in one step from Claude Code 2.1.275; on older versions, run `/plugin marketplace add ryckakas/repolore`,
+then `/plugin install repolore@repolore`. The plugin's tools are named `mcp__plugin_repolore_repolore__search` and so
+on.
+
+To switch to the plugin after `setup` registered repolore, remove that registration:
+`claude mcp remove repolore --scope user`. `repolore doctor` fails while a client has two. If you leave both and they
+run the same command, Claude Code uses the registration and leaves the plugin's server out. With different commands,
+such as a checkout run through `uv run`, both run and Claude sees every tool twice.
+
+The plugin's `refresh_hours` option sets the interval, and `0` turns the refresh off: `/plugin`, then Installed,
+repolore and Configure options. The refresh skips until `repolore setup` has built the index, and while another
+refresh runs.
+
+Claude Code doesn't update plugins from other people's marketplaces by itself: `/plugin marketplace update repolore`
+fetches the latest plugin, or turn on auto-update for the marketplace in `/plugin` under Marketplaces. The plugin
+doesn't update repolore itself.
+
+Without the plugin, a `SessionStart` hook in `~/.claude/settings.json` does the same refresh:
 
 ```json
 {
@@ -211,45 +284,29 @@ The plugin also refreshes when a session starts and the last refresh is at least
 `repolore session-start` starts the refresh in the background and returns at once, so the session doesn't wait for
 it and closing the session doesn't stop it; Claude Code ends a hook's own process with its session.
 
+Claude Code asks before the first call to the `refresh` tool. To allow it for good, add `mcp__repolore__refresh` to
+`permissions.allow` in your Claude Code settings, or `mcp__plugin_repolore_repolore__refresh` when the plugin provides
+the server.
+
 </details>
 
 <details>
-<summary><b>Upgrading, your data, and when something breaks</b></summary>
+<summary><b>Claude Desktop, Cursor, VS Code, Gemini CLI, Zed, OpenCode and Devin CLI</b></summary>
 
-`uv tool upgrade repolore-mcp` updates repolore itself. On Windows, close the sessions using repolore (in Claude Code
-you can disable it in `/mcp` instead) and run `repolore server stop` first, since running programs keep their files
-locked. Elsewhere, a session opened before the upgrade says so on its next search; reconnect repolore in your client
-(`/mcp` in Claude Code).
-
-The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
-private repos' content, so treat that folder like the repos themselves.
-
-When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
-fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
-shared server and the MCP clients that have repolore registered. A client that's installed without repolore is only
-a warning. `doctor` makes one GitHub request, and when Claude Code is installed it asks `claude mcp get repolore` (or
-`plugin:repolore:repolore`, the plugin's server), which starts repolore to check that it connects.
+- **Claude Desktop:** quit it fully and restart it after registering. It gets no token, because it has no way to
+  reference a variable. On Windows, a Store install reads its config from its own folder under `Packages`, and `setup`
+  writes there.
+- **Claude Desktop and the Cursor CLI** are reported to cut a tool call off at about 60 seconds, with no setting to
+  change it. A first search that waits for the model usually fits, in about half a minute.
+- **Cursor and Devin CLI:** variables that are set when `setup` runs go in as `${env:NAME}`. An app started from a dock
+  may not have them; a token it can't expand falls back to `gh`.
+- **VS Code:** the entry goes in the default profile's `mcp.json`.
+- **Gemini CLI:** variables go in as `$NAME`. Running `gemini mcp add` yourself later rewrites its settings with those
+  values expanded, which is why `setup` edits the file instead.
+- **Zed:** the entry gets a 300-second timeout, up from its default of 60.
+- **OpenCode:** the entry uses the older flat form, which both OpenCode V1 and V2 read.
 
 </details>
-
-## Other MCP clients
-
-`repolore-mcp` is a standard stdio MCP server, so other clients can run it too. Most take a JSON entry in the
-portable `mcpServers` format (VS Code's own `mcp.json` calls the object `servers`):
-
-```json
-{ "mcpServers": { "repolore": { "command": "repolore-mcp" } } }
-```
-
-A client can also launch it through `uvx`, without a tool install:
-
-```json
-{ "mcpServers": { "repolore": { "command": "uvx", "args": ["--managed-python", "--python", "3.12", "repolore-mcp"] } } }
-```
-
-The first launch downloads about 190 MB, which can take longer than a client waits for a server to start (30
-seconds in Claude Code), so run `uvx --managed-python --python 3.12 --from repolore-mcp repolore setup --no-register`
-once first: it fills uv's cache and sets repolore up.
 
 <details>
 <summary><b>Codex</b></summary>
@@ -278,6 +335,27 @@ starts inherit the environment of whichever session started it.
 
 </details>
 
+<details>
+<summary><b>Any other client</b></summary>
+
+Most clients take a JSON entry in the portable `mcpServers` format:
+
+```json
+{ "mcpServers": { "repolore": { "command": "repolore-mcp" } } }
+```
+
+A client can also launch it through `uvx`, without a tool install:
+
+```json
+{ "mcpServers": { "repolore": { "command": "uvx", "args": ["--managed-python", "--python", "3.12", "repolore-mcp"] } } }
+```
+
+The first launch downloads about 190 MB, which can take longer than a client waits for a server to start (30
+seconds in Claude Code), so run `uvx --managed-python --python 3.12 --from repolore-mcp repolore setup --no-register`
+once first: it fills uv's cache and sets repolore up.
+
+</details>
+
 ## What the experiments found
 
 Every retrieval choice was measured with `repolore eval` against 35 questions about the author's public repos, each
@@ -297,7 +375,7 @@ with the sources expected to answer it.
   their PR and push its passages down.
 - **One passage per source.** Plain search spent the top 5 on 3.3 sources on average, the rest being more sections
   of the same document. Keeping each source's best section raised recall@5 from 0.857 to 0.904 and lowered no
-  question, so Claude Code's search does that by default (`--distinct` on the CLI).
+  question, so the MCP `search` tool does that by default (`--distinct` on the CLI).
 - **"Not found" is the open problem.** Cosine scores of answerable and unanswerable questions overlap. The
   reranker's scores separated them much better on the 3 unanswerable questions so far, which makes them the most
   promising way to say "nothing indexed covers this".

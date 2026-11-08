@@ -400,7 +400,7 @@ async def test_without_an_index_list_repos_says_how_a_refresh_is_going(
     assert all(result.is_error for result in results)
     assert texts[0].endswith("to build it. A refresh is running.")
     assert texts[1].endswith("to build it. A refresh is running (embed 120 of 5000).")
-    assert texts[2].endswith("to build it. The last refresh failed: no token")
+    assert texts[2].endswith("uses your own environment): no token")
     assert texts[3].endswith("to build it.")
 
 

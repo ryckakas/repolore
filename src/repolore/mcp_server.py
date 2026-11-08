@@ -218,7 +218,7 @@ def _refresh_note(status: RefreshStatus) -> str:
     if status.running:
         return f" A refresh is running ({status.progress})." if status.progress else " A refresh is running."
     if status.ok is False:
-        return f" The last refresh failed: {status.error}"
+        return f" The last refresh failed (`repolore refresh` in a terminal uses your own environment): {status.error}"
     return ""
 
 
