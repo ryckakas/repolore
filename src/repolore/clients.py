@@ -112,7 +112,7 @@ def _executable(command: str) -> str:
 def _add_with_cli(command: list[str]) -> str:
     result = _run(command, ADD_SECONDS)
     if result.returncode != 0:
-        said = _first_line(result) or f"`{Path(command[0]).stem} mcp add` exited with {result.returncode}"
+        said = _what_it_said(result) or f"`{Path(command[0]).stem} mcp add` exited with {result.returncode}"
         raise RegistrationError(said)
     return "for every project (user scope)"
 
@@ -188,7 +188,7 @@ def _plugin_entries() -> Iterator[Entry]:
 def _enabled_plugins() -> list[dict[str, Any]]:
     result = _run([_executable("claude"), "plugin", "list", "--json"], LIST_SECONDS)
     if result.returncode != 0:
-        said = _first_line(result) or f"exited with {result.returncode}"
+        said = _what_it_said(result) or f"exited with {result.returncode}"
         raise RegistrationError(f"`claude plugin list --json` failed: {said}")
     try:
         plugins = json.loads(result.stdout)
@@ -209,7 +209,7 @@ def _claude_status(name: str) -> str | None:
     """What Claude Code says about a server it has; it starts the server to find out, which can take a while."""
     result = _run([_executable("claude"), "mcp", "get", name], GET_SECONDS)
     if result.returncode != 0:
-        return _first_line(result) or f"`claude mcp get {name}` exited with {result.returncode}"
+        return _what_it_said(result) or f"`claude mcp get {name}` exited with {result.returncode}"
     status, issue = _field(result.stdout, "Status"), _field(result.stdout, "Issue")
     return f"{status} ({issue})" if status and issue else status
 
@@ -535,12 +535,22 @@ CLIENTS = (CLAUDE_CODE, CODEX, GEMINI, CLAUDE_DESKTOP, CURSOR, VSCODE, ZED, OPEN
 
 
 def _run(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    # Claude Code runs on Bun, which crashes on macOS when its stdin is the /dev/tty that install.sh gives setup.
+    return subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
 
 
-def _first_line(result: subprocess.CompletedProcess[str]) -> str | None:
+def _what_it_said(result: subprocess.CompletedProcess[str]) -> str | None:
+    """The `error:` line if there is one, because a crash can print its stack trace first; else the first line."""
     said = (result.stderr or result.stdout).strip().splitlines()
-    return said[0] if said else None
+    return next((line for line in said if line.lower().startswith("error:")), said[0] if said else None)
 
 
 def _field(output: str, name: str) -> str | None:

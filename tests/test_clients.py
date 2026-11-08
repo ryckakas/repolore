@@ -68,6 +68,7 @@ def answer(
 ) -> None:
     def run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         assert kwargs["timeout"] == timeout
+        assert kwargs["stdin"] == subprocess.DEVNULL
         runs.append(command)
         return subprocess.CompletedProcess(command, code, stdout=stdout, stderr=stderr)
 
@@ -472,6 +473,18 @@ def test_a_refused_claude_registration_says_why(monkeypatch: pytest.MonkeyPatch,
     adding(monkeypatch, runs, 1, "MCP server repolore already exists in user config\nmore")
 
     with pytest.raises(RegistrationError, match=r"^MCP server repolore already exists in user config$"):
+        CLAUDE_CODE.add()
+
+
+def test_a_crash_is_reported_by_its_error_line_not_its_stack_trace(
+    monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]
+) -> None:
+    crash = (
+        "60 |   return applyHandlers(handlers, emitter, args), !0;\n\nerror: EINVAL: invalid argument, kqueue\n  at x"
+    )
+    adding(monkeypatch, runs, 1, crash)
+
+    with pytest.raises(RegistrationError, match=r"^error: EINVAL: invalid argument, kqueue$"):
         CLAUDE_CODE.add()
 
 
