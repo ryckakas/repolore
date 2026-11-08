@@ -76,6 +76,16 @@ def test_doctor_fails_when_a_check_does(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.output.splitlines()[3:] == ["✗ index: none", "  fix: run `repolore refresh`", "✓ model: x"]
 
 
+def test_doctor_passes_with_only_a_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    checks = [Check("Codex", True, "repolore isn't registered", "add it", warning=True)]
+    monkeypatch.setattr(cli, "diagnose", fake_diagnose(checks))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "doctor", "--db", "other"])
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[3:] == ["! Codex: repolore isn't registered", "  fix: add it"]
+
+
 def test_data_dir_option_overrides_data_path(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--data-dir", str(tmp_path), "version"])
 
