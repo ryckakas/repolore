@@ -25,7 +25,7 @@ from repolore.setup import (
     save_ticks,
 )
 from repolore.sources.github import RATE_LIMIT_FLOOR, GitHubClient, GitHubError, resolve_token
-from repolore.ui.rendering import render
+from repolore.ui.rendering import form_text, render
 
 # The repo form sends two fields a repo, and Starlette refuses a form with more than 1,000 by default.
 MAX_FORM_FIELDS = 100_000
@@ -101,12 +101,12 @@ class SetupPages:
 
     async def add_folder(self, request: Request) -> Response:
         form = await request.form()
-        draft = FolderDraft(_text(form, "name"), _text(form, "path"), _text(form, "patterns"))
+        draft = FolderDraft(form_text(form, "name"), form_text(form, "path"), form_text(form, "patterns"))
         return await run_in_threadpool(self._add_folder, request, draft)
 
     async def remove_folder(self, request: Request) -> Response:
         form = await request.form()
-        return await run_in_threadpool(self._remove_folder, request, _text(form, "name"))
+        return await run_in_threadpool(self._remove_folder, request, form_text(form, "name"))
 
     def _repo_form(self, request: Request, github: Check, config: Config) -> Response:
         with closing(GitHubClient.connect(resolve_token())) as client:
@@ -177,11 +177,6 @@ class SetupPages:
 
 def _texts(form: FormData, name: str) -> list[str]:
     return [value for value in form.getlist(name) if isinstance(value, str)]
-
-
-def _text(form: FormData, name: str) -> str:
-    value = form.get(name)
-    return value.strip() if isinstance(value, str) else ""
 
 
 def _lines(value: object) -> list[str]:

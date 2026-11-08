@@ -1,0 +1,14 @@
+{% if hits %}
+<ol class="hits">
+  {% for hit in hits %}
+  <li>
+    <h3>{% if hit.link %}<a href="{{ hit.link }}" target="_blank" rel="noopener">{{ hit.title }}</a>{% else %}{{ hit.title }}{% endif %}</h3>
+    <p class="muted">{{ hit.repo }} · {{ hit.kind }}{% if hit.section %} · {{ hit.section }}{% endif %} · score {{ "%.3f" | format(hit.score) }}</p>
+    {% if not hit.link %}<p class="muted"><code>{{ hit.location }}</code></p>{% endif %}
+    <p class="hit-text">{{ hit.text }}</p>
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="muted">No matches.</p>
+{% endif %}
