@@ -3,10 +3,10 @@ import shutil
 from pathlib import Path
 
 from repolore.discovery import Discovery, RepoSource, Scope
-from repolore.documents import Document, documents_from, plan_documents
+from repolore.documents import Document, documents_from, local_documents
 from repolore.progress import Phase, Progress, Report, ignore
 from repolore.sources.github import GitHubClient, RawRepo, fetch_contributions, fetch_repo
-from repolore.sources.plans import PLANS_FILE, load_plans, read_plans, save_plans
+from repolore.sources.local_docs import LOCAL_FILE, load_local_files, read_local_files, save_local_files
 
 SCOPE_FILE = "scope.txt"
 WHOLE_HISTORY = frozenset({Scope.OWNED, Scope.MEMBER})
@@ -23,7 +23,7 @@ def ingest(
         report(Progress(phase=Phase.INGEST, done=done, total=total))
         directory = raw_dir / source.name
         _sync_history(client, source, discovery.login, directory, full)
-        _sync_plans(source, directory)
+        _sync_local_files(source, directory)
     report(Progress(phase=Phase.INGEST, done=total, total=total))
     _purge(raw_dir, {source.name.lower() for source in discovery.included})
     return cached_documents(raw_dir)
@@ -31,11 +31,22 @@ def ingest(
 
 def cached_documents(raw_dir: Path, include_bot_reviews: bool = False) -> list[Document]:
     documents: list[Document] = []
+    local: dict[str, Document] = {}
     for directory in _repo_dirs(raw_dir):
-        if RawRepo.is_cached(directory):
-            documents += documents_from(RawRepo.load(directory), include_bot_reviews)
-        documents += plan_documents(_repo_name(directory), load_plans(directory))
-    return documents
+        raw = RawRepo.load(directory) if RawRepo.is_cached(directory) else None
+        if raw:
+            documents += documents_from(raw, include_bot_reviews)
+        for document in _local_documents(directory, raw):
+            # Chunk ids are built from the URL and must be unique, so a file two sources reach is indexed once.
+            local.setdefault(document.url, document)
+    return [*documents, *local.values()]
+
+
+def _local_documents(directory: Path, raw: RawRepo | None) -> list[Document]:
+    on_github = {doc["path"] for doc in raw.docs} if raw else set()
+    return local_documents(
+        _repo_name(directory), [file for file in load_local_files(directory) if file.path not in on_github]
+    )
 
 
 def _sync_history(client: GitHubClient, source: RepoSource, login: str, directory: Path, full: bool) -> None:
@@ -67,11 +78,11 @@ def _record_scope(directory: Path, scope: Scope) -> None:
         (directory / SCOPE_FILE).write_text(scope, encoding="utf-8")
 
 
-def _sync_plans(source: RepoSource, directory: Path) -> None:
-    if source.checkout:
-        save_plans(directory, read_plans(source.checkout))
+def _sync_local_files(source: RepoSource, directory: Path) -> None:
+    if source.local:
+        save_local_files(directory, read_local_files(source.local))
     else:
-        (directory / PLANS_FILE).unlink(missing_ok=True)
+        (directory / LOCAL_FILE).unlink(missing_ok=True)
 
 
 def _purge(raw_dir: Path, kept: set[str]) -> None:

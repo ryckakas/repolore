@@ -3,7 +3,18 @@ from pathlib import Path, PureWindowsPath
 import pytest
 
 from repolore.config import Config, load_config
-from repolore.setup import SelectionError, checked_roots, config_text, parse_roots, parse_selection, write_config
+from repolore.setup import (
+    PLANS_PATTERN,
+    SelectionError,
+    checked_patterns,
+    checked_roots,
+    config_text,
+    parse_patterns,
+    parse_roots,
+    parse_selection,
+    require_roots_with_patterns,
+    write_config,
+)
 
 NAMES = ["me/alpha", "me/beta", "org/gamma", "org/delta"]
 
@@ -91,11 +102,44 @@ def test_only_the_keys_set_are_written() -> None:
     assert config_text(Config(include=["me/*"])) == 'include = ["me/*"]\n'
 
 
+def test_default_depth_and_limit_are_left_out_and_others_written() -> None:
+    assert "depth" not in config_text(Config(local_patterns=["*.md"]))
+    assert config_text(Config(checkout_depth=3, max_local_files=9)) == "checkout_depth = 3\nmax_local_files = 9\n"
+
+
+def test_patterns_are_comma_separated() -> None:
+    assert parse_patterns(f" {PLANS_PATTERN} , docs/*.md,") == [PLANS_PATTERN, "docs/*.md"]
+
+
+@pytest.mark.parametrize("answer", ["", " , "])
+def test_an_empty_pattern_answer_is_refused(answer: str) -> None:
+    with pytest.raises(SelectionError, match="at least one pattern"):
+        parse_patterns(answer)
+
+
+def test_a_pattern_that_leaves_the_folder_is_refused() -> None:
+    with pytest.raises(SelectionError, match="relative to the folder"):
+        checked_patterns(["../*.md"])
+
+
+@pytest.mark.parametrize(("roots", "patterns"), [([Path("a")], []), ([], ["*.md"])])
+def test_roots_and_patterns_need_each_other(roots: list[Path], patterns: list[str]) -> None:
+    with pytest.raises(SelectionError, match="--local-root and --local-pattern go together"):
+        require_roots_with_patterns(roots, patterns)
+
+
+@pytest.mark.parametrize(("roots", "patterns"), [([Path("a")], ["*.md"]), ([], [])])
+def test_roots_with_patterns_or_neither_are_fine(roots: list[Path], patterns: list[str]) -> None:
+    require_roots_with_patterns(roots, patterns)
+
+
 def test_written_config_reads_back_the_same(tmp_path: Path) -> None:
     config = Config(
         include=["me/*", 'odd"name', "ünïcode/😀"],
         exclude=["me/old-*"],
         local_roots=[Path("~/projects"), Path(str(PureWindowsPath(r"C:\Users\me\code")))],
+        local_patterns=[PLANS_PATTERN],
+        checkout_depth=1,
     )
     path = tmp_path / "nested" / "repolore.toml"
 

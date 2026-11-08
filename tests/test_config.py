@@ -52,6 +52,47 @@ def test_invalid_config_is_rejected(tmp_path: Path, content: str) -> None:
         load_config(write(tmp_path, content))
 
 
+def test_local_document_settings_are_loaded(tmp_path: Path) -> None:
+    config = load_config(
+        write(tmp_path, 'checkout_depth = 3\nmax_local_files = 50\nlocal_patterns = [".plans/**/*.md", "docs/*.md"]')
+    )
+
+    assert config == Config(checkout_depth=3, max_local_files=50, local_patterns=[".plans/**/*.md", "docs/*.md"])
+
+
+def test_local_document_settings_default_to_nothing_local() -> None:
+    assert (Config().local_patterns, Config().checkout_depth, Config().max_local_files) == ([], 2, 2000)
+
+
+@pytest.mark.parametrize(
+    "pattern", ["", ".", "..", "../x/*.md", "a/../b.md", "/abs/*.md", "C:/x/*.md", r"C:\x\*.md", r"..\x.md"]
+)
+def test_a_pattern_that_could_leave_its_folder_is_rejected(pattern: str) -> None:
+    with pytest.raises(ValidationError, match="relative to the folder"):
+        Config(local_patterns=[pattern])
+
+
+@pytest.mark.parametrize("pattern", ["docs/**.md", "**.md", "a**/*.md", "***/x.md"])
+def test_a_double_star_inside_a_path_part_is_rejected_since_glob_would_raise(pattern: str) -> None:
+    with pytest.raises(ValidationError, match="whole path part"):
+        Config(local_patterns=[pattern])
+
+
+@pytest.mark.parametrize("pattern", [".plans/**/*.md", "**/*.md", "*.md", "a..b/*.md"])
+def test_relative_patterns_are_accepted(pattern: str) -> None:
+    assert Config(local_patterns=[pattern]).local_patterns == [pattern]
+
+
+def test_depth_zero_and_a_limit_of_one_are_the_smallest_allowed() -> None:
+    assert Config(checkout_depth=0, max_local_files=1)
+
+
+@pytest.mark.parametrize("setting", [{"checkout_depth": -1}, {"max_local_files": 0}])
+def test_a_depth_or_limit_below_the_smallest_is_rejected(setting: dict[str, int]) -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate(setting)
+
+
 def test_broken_toml_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(tomllib.TOMLDecodeError):
         load_config(write(tmp_path, "include = ["))

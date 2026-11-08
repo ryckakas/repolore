@@ -502,13 +502,13 @@ def test_raw_repo_round_trips_through_the_cache(tmp_path: Path) -> None:
 
 def test_raw_repo_removal_keeps_other_files(tmp_path: Path) -> None:
     RawRepo(info=INFO, pulls=[], issues=[], commits=[], docs=[]).save(tmp_path)
-    (tmp_path / "plans.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "local.json").write_text("[]", encoding="utf-8")
 
     RawRepo.remove(tmp_path)
     RawRepo.remove(tmp_path)
 
     assert not RawRepo.is_cached(tmp_path)
-    assert [path.name for path in tmp_path.iterdir()] == ["plans.json"]
+    assert [path.name for path in tmp_path.iterdir()] == ["local.json"]
 
 
 def test_token_comes_from_the_environment_first(monkeypatch: pytest.MonkeyPatch) -> None:

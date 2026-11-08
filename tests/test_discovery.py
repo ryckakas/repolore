@@ -7,8 +7,13 @@ from repolore import discovery as discovery_module
 from repolore.config import Config
 from repolore.discovery import RepoSource, Scope, discover
 from repolore.sources.github import GitHubClient, GitHubError, ViewerOrg, ViewerRepo
+from repolore.sources.local_docs import LocalFiles
 
 CLIENT = GitHubClient.connect("unused")
+
+
+def local(root: Path) -> LocalFiles:
+    return LocalFiles(root, (".plans/**/*.md",), 2000)
 
 
 @pytest.fixture
@@ -21,8 +26,8 @@ def found(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(discovery_module, "viewer_repositories", lambda _: ("OctoCat", viewer_repos))
     monkeypatch.setattr(discovery_module, "viewer_organizations", lambda _: [])
     monkeypatch.setattr(discovery_module, "involved_repositories", lambda *_: ["octo-org/service", "other/project"])
-    checkouts = {"OctoCat/Repo": tmp_path / "repo", "someone/clone": tmp_path / "clone"}
-    monkeypatch.setattr(discovery_module, "find_plan_checkouts", lambda _: checkouts)
+    checkouts = {"OctoCat/Repo": local(tmp_path / "repo"), "someone/clone": local(tmp_path / "clone")}
+    monkeypatch.setattr(discovery_module, "find_checkouts", lambda _: checkouts)
     return tmp_path
 
 
@@ -32,9 +37,9 @@ def test_repos_are_scoped_by_how_the_viewer_relates_to_them(found: Path) -> None
     assert result.login == "OctoCat"
     assert result.included == [
         RepoSource("octo-org/service", Scope.MEMBER),
-        RepoSource("octocat/repo", Scope.OWNED, found / "repo"),
+        RepoSource("octocat/repo", Scope.OWNED, local(found / "repo")),
         RepoSource("other/project", Scope.CONTRIBUTED),
-        RepoSource("someone/clone", Scope.LOCAL, found / "clone"),
+        RepoSource("someone/clone", Scope.LOCAL, local(found / "clone")),
     ]
     assert result.excluded == []
 
@@ -77,7 +82,7 @@ def searches(monkeypatch: pytest.MonkeyPatch, orgs: list[ViewerOrg]) -> dict[str
     monkeypatch.setattr(discovery_module, "viewer_organizations", lambda _: orgs)
     monkeypatch.setattr(discovery_module, "involved_repositories", search_outside)
     monkeypatch.setattr(discovery_module, "involved_repositories_among", search_among)
-    monkeypatch.setattr(discovery_module, "find_plan_checkouts", lambda _: {})
+    monkeypatch.setattr(discovery_module, "find_checkouts", lambda _: {})
     return calls
 
 

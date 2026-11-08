@@ -357,7 +357,7 @@ def test_parent_headings_count_toward_the_limit() -> None:
             "octo/repo · commit 0123456 · Fix",
         ),
         (DocumentKind.DOC, "https://github.com/octo/repo/blob/main/docs/a.md", "docs/a.md", "octo/repo · docs/a.md"),
-        (DocumentKind.PLAN, "file:///D:/repo/.plans/a/plan.md", ".plans/a/plan.md", "octo/repo · .plans/a/plan.md"),
+        (DocumentKind.LOCAL, "file:///D:/repo/.plans/a/plan.md", ".plans/a/plan.md", "octo/repo · .plans/a/plan.md"),
         (
             DocumentKind.REVIEW,
             "https://github.com/octo/repo/pull/1#discussion_r9",

@@ -2,7 +2,6 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from pathlib import Path
 
 from repolore.config import Config
 from repolore.sources.github import (
@@ -15,7 +14,7 @@ from repolore.sources.github import (
     viewer_organizations,
     viewer_repositories,
 )
-from repolore.sources.plans import find_plan_checkouts
+from repolore.sources.local_docs import LocalFiles, find_checkouts
 
 log = logging.getLogger(__name__)
 
@@ -29,11 +28,11 @@ class Scope(StrEnum):
 
 @dataclass(frozen=True)
 class RepoSource:
-    """A repo to ingest: its whole history (owned, member), only the viewer's part (contributed) or only local plans."""
+    """A repo to ingest: its whole history (owned, member), the viewer's part (contributed) or only local documents."""
 
     name: str
     scope: Scope
-    checkout: Path | None = None
+    local: LocalFiles | None = None
 
 
 @dataclass(frozen=True)
@@ -52,9 +51,9 @@ def discover(client: GitHubClient, config: Config) -> Discovery:
             found[repo.name.lower()] = RepoSource(repo.name, scope)
     for name in _contributed_repositories(client, login, viewer_repos):
         found.setdefault(name.lower(), RepoSource(name, Scope.CONTRIBUTED))
-    for name, checkout in find_plan_checkouts(config.local_roots).items():
+    for name, files in find_checkouts(config).items():
         known = found.get(name.lower())
-        found[name.lower()] = replace(known, checkout=checkout) if known else RepoSource(name, Scope.LOCAL, checkout)
+        found[name.lower()] = replace(known, local=files) if known else RepoSource(name, Scope.LOCAL, files)
     sources = sorted(found.values(), key=lambda source: source.name.lower())
     return Discovery(
         login=login,

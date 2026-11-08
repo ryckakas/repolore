@@ -10,7 +10,7 @@ from repolore.documents import DocumentKind
 from repolore.ingest import SCOPE_FILE, cached_documents, ingest
 from repolore.progress import Phase, Progress
 from repolore.sources.github import GitHubClient, RawRepo
-from repolore.sources.plans import PLANS_FILE
+from repolore.sources.local_docs import LOCAL_FILE, LocalFile, LocalFiles, TooManyFilesError, save_local_files
 
 FIXTURE = Path(__file__).parent / "fixtures" / "crashcause"
 REPO = "ryckakas/crashcause"
@@ -37,11 +37,11 @@ def discovery(*sources: RepoSource) -> Discovery:
     return Discovery(login="octocat", included=list(sources), excluded=[])
 
 
-def plans_checkout(tmp_path: Path) -> Path:
+def plans_checkout(tmp_path: Path, limit: int = 100) -> LocalFiles:
     checkout = tmp_path / "checkout"
     (checkout / ".plans" / "feature").mkdir(parents=True)
     (checkout / ".plans" / "feature" / "plan.md").write_text("# Plan\n\n## Steps\n\nShip it.", encoding="utf-8")
-    return checkout
+    return LocalFiles(checkout, (".plans/**/*.md",), limit)
 
 
 def test_cached_documents_come_from_every_cached_repo(tmp_path: Path) -> None:
@@ -95,28 +95,28 @@ def test_contributed_repo_fetches_only_the_viewers_part(tmp_path: Path, monkeypa
     assert fake.repos == []
 
 
-def test_local_plans_are_cached_and_become_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_files_are_cached_and_become_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     FakeFetch(monkeypatch)
-    checkout = plans_checkout(tmp_path)
+    local = plans_checkout(tmp_path)
 
-    documents = ingest(discovery(RepoSource(REPO, Scope.OWNED, checkout)), tmp_path / "raw", CLIENT)
+    documents = ingest(discovery(RepoSource(REPO, Scope.OWNED, local)), tmp_path / "raw", CLIENT)
 
-    plans = [document for document in documents if document.kind == DocumentKind.PLAN]
+    plans = [document for document in documents if document.kind == DocumentKind.LOCAL]
     assert [(plan.repo, plan.title) for plan in plans] == [(REPO, ".plans/feature/plan.md")]
     assert plans[0].url.startswith("file:///")
 
 
-def test_dropped_checkout_removes_its_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dropped_checkout_removes_its_local_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     FakeFetch(monkeypatch)
     raw_dir = tmp_path / "raw"
     ingest(discovery(RepoSource(REPO, Scope.OWNED, plans_checkout(tmp_path))), raw_dir, CLIENT)
 
     ingest(discovery(RepoSource(REPO, Scope.OWNED)), raw_dir, CLIENT)
 
-    assert not (raw_dir / REPO / PLANS_FILE).exists()
+    assert not (raw_dir / REPO / LOCAL_FILE).exists()
 
 
-def test_repo_left_with_only_local_plans_loses_its_github_history(
+def test_repo_left_with_only_local_files_loses_its_github_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     FakeFetch(monkeypatch)
@@ -128,7 +128,48 @@ def test_repo_left_with_only_local_plans_loses_its_github_history(
 
     assert not RawRepo.is_cached(raw_dir / REPO)
     assert not (raw_dir / REPO / SCOPE_FILE).exists()
-    assert {document.kind for document in documents} == {DocumentKind.PLAN}
+    assert {document.kind for document in documents} == {DocumentKind.LOCAL}
+
+
+def local_file(path: str, url: str = "file:///a") -> LocalFile:
+    return LocalFile(path=path, url=url, text="# Local")
+
+
+def test_a_local_file_github_also_has_is_left_to_the_github_copy(tmp_path: Path) -> None:
+    shutil.copytree(FIXTURE, tmp_path / REPO)
+    github_path = RawRepo.load(FIXTURE).docs[0]["path"]
+    save_local_files(
+        tmp_path / REPO, [local_file(github_path, "file:///tracked"), local_file("notes/draft.md", "file:///draft")]
+    )
+
+    local = [document.title for document in cached_documents(tmp_path) if document.kind == DocumentKind.LOCAL]
+
+    assert local == ["notes/draft.md"]
+
+
+def test_a_repo_with_no_github_cache_keeps_every_local_file(tmp_path: Path) -> None:
+    save_local_files(tmp_path / REPO, [local_file("README.md")])
+
+    assert [document.title for document in cached_documents(tmp_path)] == ["README.md"]
+
+
+def test_a_file_two_sources_reach_is_one_document_under_the_first(tmp_path: Path) -> None:
+    save_local_files(tmp_path / "a" / "first", [local_file("x.md", "file:///same")])
+    save_local_files(tmp_path / "b" / "second", [local_file("x.md", "file:///same")])
+
+    assert [document.repo for document in cached_documents(tmp_path)] == ["a/first"]
+
+
+def test_too_many_local_files_stops_ingest_and_purges_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeFetch(monkeypatch)
+    raw_dir = tmp_path / "raw"
+    shutil.copytree(FIXTURE, raw_dir / "other" / "kept")
+    local = plans_checkout(tmp_path, limit=0)
+
+    with pytest.raises(TooManyFilesError):
+        ingest(discovery(RepoSource(REPO, Scope.OWNED, local)), raw_dir, CLIENT)
+
+    assert RawRepo.is_cached(raw_dir / "other" / "kept")
 
 
 def test_repos_no_longer_discovered_are_purged(
