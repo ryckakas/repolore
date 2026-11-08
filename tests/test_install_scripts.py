@@ -67,8 +67,8 @@ def write_stub(path: Path, text: str) -> None:
 @pytest.fixture
 def shell(tmp_path: Path) -> ShellRun:
     sh = shutil.which("sh")
-    if sh is None:
-        pytest.skip("no sh on this machine")
+    if sys.platform == "win32" or sh is None:
+        pytest.skip("install.sh is for Linux and macOS, and Git's sh on Windows puts its own curl ahead of the stubs")
     stubs = tmp_path / "stubs"
     parked = tmp_path / "parked"
     home = tmp_path / "home"
