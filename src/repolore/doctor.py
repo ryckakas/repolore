@@ -11,7 +11,7 @@ import httpx
 from pydantic import ValidationError
 
 from repolore import __version__
-from repolore.clients import CLIENTS, McpClient, registration
+from repolore.clients import CLIENTS, Entry, McpClient, RegistrationError, is_connected, repolore_entries
 from repolore.config import load_config
 from repolore.embedding.engines import build_engine
 from repolore.embedding.local import VOYAGE_NANO, is_downloaded, spec_for
@@ -31,6 +31,8 @@ from repolore.sources.github import (
 from repolore.store import StoreError, connect_read_only, index_settings, repo_counts, vector_version
 
 REFRESH_FIX = "run `repolore refresh`"
+CONNECTION_FIX = "`repolore server stop`, then reconnect repolore in the client; `repolore server status` names its log"
+CLIENT_ERRORS = (OSError, subprocess.SubprocessError, RegistrationError)
 
 
 @dataclass(frozen=True)
@@ -239,21 +241,37 @@ def server_check(files: ServerFiles) -> Check:
 
 
 def registration_check(client: McpClient) -> Check | None:
-    try:
-        found = registration(client)
-    except (OSError, subprocess.SubprocessError) as error:
-        return Check(client.name, False, f"`{client.command} mcp get repolore` failed: {error}")
-    if found is None:
+    if not client.present():
         return None
-    if not found.found:
-        said = f" ({found.status})" if found.status else ""
-        return Check(client.name, True, f"repolore isn't registered{said}", client.register, warning=True)
-    registered = f"repolore is registered{found.alias}" + (f": {found.status}" if found.status else "")
-    if not found.healthy:
-        return Check(
-            client.name,
-            False,
-            registered,
-            "`repolore server stop`, then reconnect repolore in the client; `repolore server status` names its log",
-        )
-    return Check(client.name, True, registered)
+    try:
+        found = repolore_entries(client)
+    except CLIENT_ERRORS as error:
+        return Check(client.name, False, f"can't list its MCP servers: {error}")
+    if not found:
+        return Check(client.name, True, "repolore isn't registered", client.register, warning=True)
+    if len(found) > 1:
+        return _duplicates_check(client, found)
+    return _entry_check(client, found[0])
+
+
+def _duplicates_check(client: McpClient, found: list[Entry]) -> Check:
+    listed = ", ".join(f"{entry.name} ({entry.scope})" for entry in found)
+    removals = "; ".join(entry.remove for entry in found)
+    return Check(client.name, False, f"repolore is registered {len(found)} times: {listed}", f"keep one: {removals}")
+
+
+def _entry_check(client: McpClient, entry: Entry) -> Check:
+    registered = f"repolore is registered{entry.alias}"
+    if entry.command_is_gone:
+        detail = f"{registered}, but {entry.command[0]} no longer exists"
+        return Check(client.name, False, detail, f"{entry.remove}, then run `repolore setup`")
+    if client.health is None:
+        return Check(client.name, True, f"{registered}, connection not checked")
+    try:
+        status = client.health(entry.name)
+    except CLIENT_ERRORS as error:
+        return Check(client.name, False, f"{registered}, but checking it failed: {error}")
+    detail = registered + (f": {status}" if status else "")
+    return (
+        Check(client.name, True, detail) if is_connected(status) else Check(client.name, False, detail, CONNECTION_FIX)
+    )

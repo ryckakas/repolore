@@ -11,7 +11,7 @@ from conftest import FakeEmbedder
 
 from repolore import __version__, doctor
 from repolore.chunking import Chunk
-from repolore.clients import CLAUDE_CODE, CODEX, PLUGIN_SERVER, Registration
+from repolore.clients import PLUGIN_SERVER, Entry, McpClient, RegistrationError
 from repolore.doctor import (
     Check,
     config_check,
@@ -412,34 +412,75 @@ def test_a_running_server_shows_where_its_version_and_its_sessions(tmp_path: Pat
     )
 
 
-def registered_as(monkeypatch: pytest.MonkeyPatch, found: Registration | None) -> None:
-    monkeypatch.setattr(doctor, "registration", lambda _: found)
+USER_ENTRY = Entry("repolore", ("repolore-mcp",), "user", "`remove user`")
+PLUGIN_ENTRY = Entry(PLUGIN_SERVER, ("repolore-mcp",), "plugin", "`remove plugin`")
 
 
-def test_a_healthy_registration_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, Registration(found=True, status="✓ Connected"))
-
-    assert registration_check(CODEX) == Check("Codex", True, "repolore is registered: ✓ Connected")
+def never() -> list[Entry]:
+    raise AssertionError("shouldn't be called")
 
 
-def test_a_registration_by_the_plugin_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, Registration(found=True, status="✓ Connected", name=PLUGIN_SERVER))
+def client_with(*entries: Entry, health: Callable[[str], str | None] | None = None) -> McpClient:
+    return McpClient("Codex", lambda: True, lambda: list(entries), lambda: "added", "add it", health)
 
-    assert registration_check(CLAUDE_CODE) == Check(
-        "Claude Code", True, "repolore is registered as plugin:repolore:repolore: ✓ Connected"
+
+def connected(_: str) -> str:
+    return "✓ Connected"
+
+
+def test_a_healthy_registration_passes() -> None:
+    assert registration_check(client_with(USER_ENTRY, health=connected)) == Check(
+        "Codex", True, "repolore is registered: ✓ Connected"
     )
 
 
-def test_a_client_that_isnt_installed_is_not_checked(monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, None)
+def test_a_registration_by_the_plugin_is_named() -> None:
+    assert registration_check(client_with(PLUGIN_ENTRY, health=connected)) == Check(
+        "Codex", True, "repolore is registered as plugin:repolore:repolore: ✓ Connected"
+    )
 
-    assert registration_check(CODEX) is None
+
+def test_a_client_it_cant_check_says_so() -> None:
+    assert registration_check(client_with(USER_ENTRY)) == Check(
+        "Codex", True, "repolore is registered, connection not checked"
+    )
 
 
-def test_a_missing_registration_warns_with_how_to_add_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, Registration(found=False))
+def test_a_status_with_nothing_to_say_passes() -> None:
+    assert registration_check(client_with(USER_ENTRY, health=lambda _: None)) == Check(
+        "Codex", True, "repolore is registered"
+    )
 
-    assert registration_check(CODEX) == Check("Codex", True, "repolore isn't registered", CODEX.register, warning=True)
+
+def test_the_health_check_asks_about_the_entry_it_found() -> None:
+    asked: list[str] = []
+
+    def health(name: str) -> str:
+        asked.append(name)
+        return "✓ Connected"
+
+    registration_check(client_with(PLUGIN_ENTRY, health=health))
+
+    assert asked == [PLUGIN_SERVER]
+
+
+def test_a_client_that_isnt_installed_is_not_checked() -> None:
+    absent = McpClient("Codex", lambda: False, never, lambda: "added", "add it")
+
+    assert registration_check(absent) is None
+
+
+def test_a_missing_registration_warns_with_how_to_add_it() -> None:
+    assert registration_check(client_with()) == Check(
+        "Codex", True, "repolore isn't registered", "add it", warning=True
+    )
+
+
+def test_other_servers_dont_count_as_repolore() -> None:
+    check = registration_check(client_with(Entry("other", ("other-cmd",), "user", "x")))
+
+    assert check is not None
+    assert check.warning
 
 
 def test_a_warning_prints_its_own_mark_and_its_fix() -> None:
@@ -448,43 +489,78 @@ def test_a_warning_prints_its_own_mark_and_its_fix() -> None:
     )
 
 
-def test_a_missing_registration_shows_what_the_client_said(monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, Registration(found=False, status="unknown command mcp"))
+def test_a_registration_that_cant_connect_fails() -> None:
+    failing = "! Connected · tools fetch failed (Request timed out)"
 
-    check = registration_check(CODEX)
+    check = registration_check(client_with(USER_ENTRY, health=lambda _: failing))
 
-    assert check is not None
-    assert check.detail == "repolore isn't registered (unknown command mcp)"
-
-
-def test_a_registration_that_cant_connect_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, Registration(found=True, status="! Connected · tools fetch failed (Request timed out)"))
-
-    check = registration_check(CODEX)
-
-    assert check is not None
-    assert not check.ok
-    assert check.detail == "repolore is registered: ! Connected · tools fetch failed (Request timed out)"
+    assert check == Check("Codex", False, f"repolore is registered: {failing}", doctor.CONNECTION_FIX)
 
 
-def test_a_client_cli_that_hangs_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    def hang(_: object) -> Registration:
-        raise subprocess.TimeoutExpired(["codex"], 120)
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired(["claude"], 120), OSError("denied")])
+def test_a_health_check_that_breaks_fails(error: Exception) -> None:
+    def broken(_: str) -> str:
+        raise error
 
-    monkeypatch.setattr(doctor, "registration", hang)
-
-    check = registration_check(CODEX)
+    check = registration_check(client_with(USER_ENTRY, health=broken))
 
     assert check is not None
     assert not check.ok
-    assert check.detail.startswith("`codex mcp get repolore` failed: ")
+    assert check.detail == f"repolore is registered, but checking it failed: {error}"
+
+
+@pytest.mark.parametrize(
+    "error", [RegistrationError("can't read it"), subprocess.TimeoutExpired(["claude"], 60), OSError("denied")]
+)
+def test_a_listing_that_cant_be_read_fails(error: Exception) -> None:
+    def broken() -> list[Entry]:
+        raise error
+
+    check = registration_check(McpClient("Codex", lambda: True, broken, lambda: "added", "add it"))
+
+    assert check == Check("Codex", False, f"can't list its MCP servers: {error}")
+
+
+def test_two_registrations_fail_naming_each_and_its_removal() -> None:
+    other = Entry("mine", ("uv", "run", "repolore-mcp"), "user", "`remove mine`")
+
+    check = registration_check(client_with(USER_ENTRY, other, health=connected))
+
+    assert check == Check(
+        "Codex",
+        False,
+        "repolore is registered 2 times: repolore (user), mine (user)",
+        "keep one: `remove user`; `remove mine`",
+    )
+
+
+def test_a_harmless_duplicate_with_the_same_command_still_fails() -> None:
+    check = registration_check(client_with(USER_ENTRY, PLUGIN_ENTRY))
+
+    assert check is not None
+    assert not check.ok
+
+
+def test_a_command_that_no_longer_exists_fails_without_starting_it(tmp_path: Path) -> None:
+    gone = str(tmp_path / "repolore-mcp")
+    entry = Entry("repolore", (gone,), "user", "`remove user`")
+
+    def not_called(_: str) -> str:
+        raise AssertionError("shouldn't be called")
+
+    check = registration_check(client_with(entry, health=not_called))
+
+    assert check == Check(
+        "Codex",
+        False,
+        f"repolore is registered, but {gone} no longer exists",
+        "`remove user`, then run `repolore setup`",
+    )
 
 
 @pytest.mark.usefixtures("env_token")
-def test_diagnose_checks_every_part_in_order(data_paths: AppPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, Registration(found=True))
-
-    checks = list(diagnose(data_paths, "default", github_answering(), clients=[CODEX]))
+def test_diagnose_checks_every_part_in_order(data_paths: AppPaths) -> None:
+    checks = list(diagnose(data_paths, "default", github_answering(), clients=[client_with(USER_ENTRY)]))
 
     assert [check.name for check in checks] == [
         "sqlite-vec",
@@ -507,9 +583,9 @@ def test_the_build_engine_is_reported_and_never_fails(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.usefixtures("env_token")
-def test_diagnose_skips_clients_that_arent_installed(data_paths: AppPaths, monkeypatch: pytest.MonkeyPatch) -> None:
-    registered_as(monkeypatch, None)
+def test_diagnose_skips_clients_that_arent_installed(data_paths: AppPaths) -> None:
+    absent = McpClient("Codex", lambda: False, never, lambda: "added", "add it")
 
-    checks = list(diagnose(data_paths, "default", github_answering(), clients=[CODEX]))
+    checks = list(diagnose(data_paths, "default", github_answering(), clients=[absent]))
 
     assert checks[-1].name == "shared server"
