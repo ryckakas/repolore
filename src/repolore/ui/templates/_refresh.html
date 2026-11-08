@@ -1,0 +1,8 @@
+<div id="refresh"{% if running %} data-running{% endif %}>
+  <ul class="checks">
+    {% with check = refresh %}{% include "_check.html" %}{% endwith %}
+  </ul>
+  <form method="post" action="/refresh">
+    <button type="submit"{% if running %} disabled{% endif %}>Refresh now</button>
+  </form>
+</div>
