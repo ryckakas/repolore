@@ -84,18 +84,23 @@ def find_checkouts(config: Config) -> dict[str, LocalFiles]:
 
 def find_folders(config: Config) -> dict[str, LocalFiles]:
     """The files of each local_folders entry whose path exists, keyed by the repo name it goes by."""
-    found = {folder.repo: _folder_files(folder, config.max_local_files) for folder in config.local_folders}
-    return {repo: files for repo, files in found.items() if files}
+    found: dict[str, LocalFiles] = {}
+    for folder in config.local_folders:
+        if files := folder_files(folder, config.max_local_files):
+            found[folder.repo] = files
+        else:
+            log.warning("local folder %s doesn't exist", folder.path)
+    return found
 
 
-def _folder_files(folder: LocalFolder, limit: int) -> LocalFiles | None:
+def folder_files(folder: LocalFolder, limit: int) -> LocalFiles | None:
+    """The files of a local_folders entry, or None when its path doesn't exist."""
     # Resolved first, so a path the user named can itself be a link; links further in still can't leave it.
     path = folder.path.expanduser().resolve()
     if os.path.isfile(path):
         return LocalFiles(path.parent, (glob.escape(path.name),), limit)
     if os.path.isdir(path):
         return LocalFiles(path, tuple(folder.patterns), limit)
-    log.warning("local folder %s doesn't exist", path)
     return None
 
 
