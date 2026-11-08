@@ -49,7 +49,7 @@ uv run repolore server status  # the shared MCP server: pid, address, version, s
 uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh;
                             # each question has a flag (--include/--exclude/--local-root, --replace-config,
-                            # --register, --refresh)
+                            # --register, --clients, --refresh)
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --distinct, --show-misses,
                             # --holdout
 uv run ruff format          # format
@@ -245,14 +245,19 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
   never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` finds
   every registration of repolore in each installed client from its configuration, by name or by the command it runs,
-  without starting a server: Claude Code's user, local and project scopes plus `claude plugin list --json`, and Codex's
-  `config.toml` files. One registration is checked with `claude mcp get` on Claude Code, which starts the server; other
-  clients can't be checked. More than one fails, naming each and how to remove it. A client without repolore warns.
+  without starting a server: Claude Code's user, local and project scopes plus `claude plugin list --json`, and the
+  other clients' user files and those in the current folder. One registration is checked with `claude mcp get` on
+  Claude Code, which starts the server; other clients can't be checked. More than one fails, naming each and how to
+  remove it. A client without repolore warns.
 - `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
   local roots, and writing `repolore.toml`. The command reuses doctor's GitHub check and stops only when the token
-  doesn't work. `clients.py` registers repolore: `claude mcp add --scope user`, and for Codex an entry appended to
-  `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp add` can't set the timeouts. A client that already has
-  repolore is left alone.
+  doesn't work. `clients.py` has one table of the clients it knows, `--clients` picking some by key: Claude Code and
+  Devin CLI through their own `mcp add`, Codex by appending to `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp
+  add` can't set the timeouts, and Gemini CLI, Claude Desktop, Cursor, VS Code, Zed and OpenCode through
+  `config_files.py`. Gemini's `mcp add` isn't used because it saves its settings with variables expanded. Apps started
+  from a dock or the Start menu get the relay's absolute path, because their PATH may lack the tool folder. A secret
+  only ever goes in as a reference to the variable, so Claude Desktop, with no way to reference one, never gets the
+  token. A client that already has repolore for every project is left alone.
 - `config_files.py` adds an entry to another app's JSON settings file. It reads JSON with comments and trailing commas,
   and inserts the entry as text after the `{` of its object, so every other byte stays. It writes only if parsing the
   result gives the old settings plus the entry, keeps one `<file>.repolore-backup` from before its first change, and

@@ -543,6 +543,15 @@ def test_the_token_source_is_the_environment_variable_when_set(monkeypatch: pyte
     assert token_source() == github.TOKEN_ENV
 
 
+@pytest.mark.parametrize("reference", ["${env:REPOLORE_GITHUB_TOKEN}", "$REPOLORE_GITHUB_TOKEN"])
+def test_a_reference_a_client_couldnt_expand_isnt_a_token(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
+    monkeypatch.setenv(github.TOKEN_ENV, reference)
+    monkeypatch.setattr(subprocess, "run", lambda *_, **__: subprocess.CompletedProcess(["gh"], 0, stdout="from-gh\n"))
+
+    assert resolve_token() == "from-gh"
+    assert token_source() == github.GH_TOKEN
+
+
 def test_the_token_source_is_gh_without_the_environment_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(github.TOKEN_ENV, raising=False)
 

@@ -1166,7 +1166,7 @@ def setup_run(
             run.registered.append(name)
             return "for every project (user scope)"
 
-        return McpClient(name, lambda: known is not None, entries, add, "add it")
+        return McpClient(name.split()[0].lower(), name, lambda: known is not None, entries, add, "add it")
 
     def start_refresh(data_dir: Path, db: str) -> bool:
         run.refreshes.append((data_dir, db))
@@ -1367,6 +1367,39 @@ def test_setup_ignores_a_client_listing_only_other_servers(tmp_path: Path, monke
 
     assert result.exit_code == 0
     assert run.registered == ["Claude Code"]
+
+
+def test_setup_only_touches_the_clients_it_was_told_to(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": [], "Codex": []})
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", "--clients", "codex", *ANSWERED])
+
+    assert result.exit_code == 0, result.output
+    assert run.registered == ["Codex"]
+    assert "Claude Code" not in result.output
+
+
+def test_a_named_client_that_isnt_here_fails_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": [], "Codex": None})
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", "--clients", "claude,codex", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert run.registered == ["Claude Code"]
+    assert "Codex: couldn't register repolore: it wasn't found on this machine" in result.output
+    assert run.refreshes
+
+
+def test_an_unknown_client_stops_setup_before_it_does_anything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", "--clients", "nope", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert "--clients takes a comma-separated list of claude, codex; got 'nope'" in result.output
+    assert "GitHub" not in result.output
+    assert not run.config_file.exists()
+    assert run.refreshes == []
 
 
 def test_setup_doesnt_register_when_it_cant_list_a_clients_servers(

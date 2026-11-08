@@ -40,8 +40,14 @@ class RateLimited(GitHubError):
     pass
 
 
+def _environment_token() -> str | None:
+    """The token from the environment; an MCP client may pass on a reference it couldn't expand, which isn't one."""
+    token = os.environ.get(TOKEN_ENV)
+    return token if token and not token.startswith("$") else None
+
+
 def resolve_token() -> str:
-    if token := os.environ.get(TOKEN_ENV):
+    if token := _environment_token():
         return token
     try:
         result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True)
@@ -51,7 +57,7 @@ def resolve_token() -> str:
 
 
 def token_source() -> str:
-    return TOKEN_ENV if os.environ.get(TOKEN_ENV) else GH_TOKEN
+    return TOKEN_ENV if _environment_token() else GH_TOKEN
 
 
 @dataclass(frozen=True)
