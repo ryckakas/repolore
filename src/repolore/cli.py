@@ -4,7 +4,9 @@ import logging
 import random
 import subprocess
 import sys
+import threading
 import tomllib
+import webbrowser
 from collections import Counter
 from collections.abc import Callable, Generator
 from contextlib import closing, contextmanager
@@ -399,6 +401,28 @@ def doctor(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
         failed |= not check.ok
     if failed:
         raise typer.Exit(1)
+
+
+@app.command()
+def ui(
+    ctx: typer.Context,
+    browser: Annotated[bool, typer.Option(help="Open the page in the default browser.")] = True,
+    db: IndexOption = DEFAULT_INDEX,
+) -> None:
+    """Show repolore's status in a local web page, until Ctrl-C."""
+    # uvicorn, Starlette and Jinja load only for this command, not for every other command.
+    from repolore.ui.app import serve
+
+    paths: AppPaths = ctx.obj
+    serve(paths, db, partial(_page_ready, browser=browser))
+    typer.echo("Stopped.")
+
+
+def _page_ready(address: str, browser: bool) -> None:
+    typer.echo(f"repolore's page is at {address}\nCtrl-C stops it.")
+    if browser:
+        # On a thread, because a console browser, the only one a machine with no display has, blocks until it's closed.
+        threading.Thread(target=webbrowser.open, args=(address,), daemon=True).start()
 
 
 @app.command()

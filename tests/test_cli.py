@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import queue
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,7 @@ from repolore.setup import PLANS_PATTERN
 from repolore.sources.github import GitHubClient, GitHubError, TokenInfo
 from repolore.sources.local_docs import LocalFiles
 from repolore.store import Hit, connect, index_settings, write_index
+from repolore.ui import app as ui_app
 
 runner = CliRunner()
 EXAMPLE_FILE = Path(__file__).parent.parent / "evals" / "questions.example.yaml"
@@ -1043,6 +1045,45 @@ def test_session_start_fails_when_the_refresh_cant_start(
 
     assert result.exit_code == 1
     assert "can't start python" in result.output
+
+
+@pytest.fixture
+def ui_serve(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, str]]:
+    served: list[tuple[Path, str]] = []
+
+    def serve(paths: AppPaths, db: str, on_ready: Callable[[str], object]) -> None:
+        served.append((paths.data_dir, db))
+        on_ready("http://127.0.0.1:1/?token=t")
+
+    monkeypatch.setattr(ui_app, "serve", serve)
+    return served
+
+
+def test_ui_prints_the_address_and_says_how_to_stop(
+    tmp_path: Path, ui_serve: list[tuple[Path, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli.webbrowser, "open", lambda _: pytest.fail("a browser opened"))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "ui", "--no-browser", "--db", "other"])
+
+    assert result.exit_code == 0
+    assert ui_serve == [(tmp_path, "other")]
+    assert "http://127.0.0.1:1/?token=t" in result.output
+    assert "Ctrl-C" in result.output
+    assert "Stopped." in result.output
+
+
+def test_ui_opens_the_browser_at_that_address(
+    tmp_path: Path, ui_serve: list[tuple[Path, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: queue.Queue[str] = queue.Queue()
+    monkeypatch.setattr(cli.webbrowser, "open", opened.put)
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "ui"])
+
+    assert result.exit_code == 0
+    assert opened.get(timeout=5) == "http://127.0.0.1:1/?token=t"
+    assert ui_serve == [(tmp_path, "default")]
 
 
 def test_server_status_without_a_server(tmp_path: Path) -> None:

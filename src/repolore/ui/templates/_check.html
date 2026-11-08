@@ -1,0 +1,7 @@
+<li class="{% if check.warning %}warning{% elif check.ok %}pass{% else %}fail{% endif %}">
+  <span class="mark">{% if check.warning %}!{% elif check.ok %}✓{% else %}✗{% endif %}</span>
+  <div>
+    <strong>{{ check.name }}</strong>: {{ check.detail }}
+    {% if check.fix %}<p class="fix">Fix: {{ check.fix }}</p>{% endif %}
+  </div>
+</li>

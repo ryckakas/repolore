@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block main %}
+{% if notice %}<p class="notice" role="alert">{{ notice }}</p>{% endif %}
+<section>
+  <h2>Status</h2>
+  {% include "_checks.html" %}
+</section>
+<section>
+  <h2>Refresh</h2>
+  {% include "_refresh.html" %}
+</section>
+<section>
+  <h2>Checks</h2>
+  <p class="muted">Everything <code>repolore doctor</code> checks. It uses GitHub once, and checking Claude Code starts the shared server.</p>
+  <form method="post" action="/checks" data-into="#checks" data-waiting="Running the checks…">
+    <button type="submit">Run checks</button>
+  </form>
+  <div id="checks" aria-live="polite"></div>
+</section>
+{% endblock %}

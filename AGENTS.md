@@ -48,6 +48,8 @@ uv run repolore session-start  # what the plugin's SessionStart hook runs: a bac
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
+uv run repolore ui          # a local web page with the status, Refresh now and doctor's checks, until Ctrl-C;
+                            # --no-browser only prints its address
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh;
                             # each question has a flag (--include/--exclude/--local-root/--local-pattern, --replace-config,
                             # --register, --clients, --refresh)
@@ -262,6 +264,15 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   other clients' user files and those in the current folder. One registration is checked with `claude mcp get` on
   Claude Code, which starts the server; other clients can't be checked. More than one fails, naming each and how to
   remove it. A client without repolore warns.
+- `ui/app.py` is `repolore ui`: Starlette routes with Jinja templates (autoescaped) and one static script, served by
+  its own uvicorn on 127.0.0.1, port 0, until Ctrl-C. It isn't part of the shared server, whose custom routes get no
+  auth or Host check from the SDK and which would need a heartbeat for an open page. It loads no model, about 56 MB, and
+  has the terminal's environment. A token new at every run is in the printed address and works until the run ends;
+  `/?token=` swaps it for an `HttpOnly`, `SameSite=Strict` cookie and redirects, so it leaves the address bar. `Guard`
+  needs that cookie on every request and an `Origin` equal to `http://<Host>` on every POST, and
+  `TrustedHostMiddleware` the Host `127.0.0.1`. A strict CSP allows no inline script or style. `Referrer-Policy` must
+  stay `same-origin`: under `no-referrer`, browsers send `Origin: null` on a form POST. Doctor's checks run on a button
+  and not on page load, because checking Claude Code starts the shared server and so the model.
 - `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
   local roots, and writing `repolore.toml`, which keeps the settings setup can't ask about when it replaces a file. The command reuses doctor's GitHub check and stops only when the token
   doesn't work. `clients.py` has one table of the clients it knows, `--clients` picking some by key: Claude Code and
@@ -291,7 +302,7 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `mcp__plugin_repolore_repolore__*` unless a user-scope `repolore` with the same command wins. `tests/test_plugin.py`
   checks the files against the code; `claude plugin validate .` checks them against Claude Code.
 
-Nothing is async except the relay's forwarding and the shared server's watcher, which live on the SDK's event loop:
+Nothing is async except the relay's forwarding, the shared server's watcher, which live on the SDK's event loop, and the `ui` page's middleware:
 the MCP SDK runs the plain `def` tools on worker threads (40, shared by every session), and the rest of the pipeline
 is synchronous on purpose. `LocalEmbedder` locks its lazy model load because those threads can search in parallel.
 
