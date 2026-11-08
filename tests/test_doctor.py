@@ -436,10 +436,16 @@ def test_a_client_that_isnt_installed_is_not_checked(monkeypatch: pytest.MonkeyP
     assert registration_check(CODEX) is None
 
 
-def test_a_missing_registration_fails_with_how_to_add_it(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_missing_registration_warns_with_how_to_add_it(monkeypatch: pytest.MonkeyPatch) -> None:
     registered_as(monkeypatch, Registration(found=False))
 
-    assert registration_check(CODEX) == Check("Codex", False, "repolore isn't registered", CODEX.register)
+    assert registration_check(CODEX) == Check("Codex", True, "repolore isn't registered", CODEX.register, warning=True)
+
+
+def test_a_warning_prints_its_own_mark_and_its_fix() -> None:
+    assert str(Check("Codex", True, "repolore isn't registered", "add it", warning=True)) == (
+        "! Codex: repolore isn't registered\n  fix: add it"
+    )
 
 
 def test_a_missing_registration_shows_what_the_client_said(monkeypatch: pytest.MonkeyPatch) -> None:

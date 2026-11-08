@@ -39,10 +39,17 @@ class Check:
     ok: bool
     detail: str
     fix: str | None = None
+    warning: bool = False
 
     def __str__(self) -> str:
-        line = f"{'✓' if self.ok else '✗'} {self.name}: {self.detail}"
+        line = f"{self._mark} {self.name}: {self.detail}"
         return f"{line}\n  fix: {self.fix}" if self.fix else line
+
+    @property
+    def _mark(self) -> str:
+        if self.warning:
+            return "!"
+        return "✓" if self.ok else "✗"
 
 
 def diagnose(
@@ -240,7 +247,7 @@ def registration_check(client: McpClient) -> Check | None:
         return None
     if not found.found:
         said = f" ({found.status})" if found.status else ""
-        return Check(client.name, False, f"repolore isn't registered{said}", client.register)
+        return Check(client.name, True, f"repolore isn't registered{said}", client.register, warning=True)
     registered = f"repolore is registered{found.alias}" + (f": {found.status}" if found.status else "")
     if not found.healthy:
         return Check(

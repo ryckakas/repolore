@@ -46,7 +46,7 @@ uv run repolore session-start  # what the plugin's SessionStart hook runs: a bac
                             # started --hours ago or more (default 12, or the plugin's refresh_hours option)
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
-uv run repolore doctor      # check the setup, each part as a pass or a fail with its fix; exits 1 on a fail
+uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh;
                             # each question has a flag (--include/--exclude/--local-root, --replace-config,
                             # --register, --refresh)

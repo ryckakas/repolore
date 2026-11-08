@@ -226,9 +226,9 @@ private repos' content, so treat that folder like the repos themselves.
 
 When something doesn't work, `repolore doctor` checks each part of the setup and prints the fix for each one that
 fails: GitHub access and the token's scopes, `repolore.toml`, the index, the embedding model, the last refresh, the
-shared server and the MCP clients that have repolore registered. It makes one GitHub request, and when Claude Code is
-installed it asks `claude mcp get repolore` (or `plugin:repolore:repolore`, the plugin's server), which starts
-repolore to check that it connects.
+shared server and the MCP clients that have repolore registered. A client that's installed without repolore is only
+a warning. `doctor` makes one GitHub request, and when Claude Code is installed it asks `claude mcp get repolore` (or
+`plugin:repolore:repolore`, the plugin's server), which starts repolore to check that it connects.
 
 </details>
 
