@@ -47,8 +47,20 @@ from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
 from repolore.server_state import ServerFiles, connected_relays, is_running, read_discovery
-from repolore.setup import ALL, SelectionError, checked_roots, parse_roots, parse_selection, write_config
+from repolore.setup import (
+    ALL,
+    PLANS_PATTERN,
+    SelectionError,
+    checked_patterns,
+    checked_roots,
+    parse_patterns,
+    parse_roots,
+    parse_selection,
+    require_roots_with_patterns,
+    write_config,
+)
 from repolore.sources.github import GitHubClient, GitHubError, resolve_token
+from repolore.sources.local_docs import LocalFiles, TooManyFilesError
 from repolore.store import (
     EmbeddingCache,
     Filters,
@@ -123,22 +135,30 @@ def repos(
     ctx: typer.Context,
     excluded: Annotated[bool, typer.Option(help="Also list the repos repolore.toml excludes.")] = False,
 ) -> None:
-    """List the repos ingest would fetch and why: owned, member, contributed to, or local plans only."""
+    """List the repos ingest would fetch and why: owned, member, contributed to, or local documents only."""
     paths: AppPaths = ctx.obj
     config = _config_or_exit(paths.config_file)
     with _github() as client:
         discovery = discover(client, config)
-    rows = [(source.name, source.scope.value, source.checkout) for source in discovery.included]
+    rows = [(source.name, source.scope.value, source.local) for source in discovery.included]
     if excluded:
         rows += [(source.name, "excluded", None) for source in discovery.excluded]
     width = max((len(name) for name, _, _ in rows), default=0)
-    for name, reason, checkout in rows:
-        plans = f"  + plans in {checkout}" if checkout else ""
-        typer.echo(f"{name:<{width}}  {reason:<11}{plans}".rstrip())
+    for name, reason, local in rows:
+        typer.echo(f"{name:<{width}}  {reason:<11}{_local_files_note(local)}".rstrip())
     count = len(discovery.included)
     typer.echo(f"{count} repo{'' if count == 1 else 's'} for {discovery.login}")
     if discovery.excluded:
         typer.echo(f"{len(discovery.excluded)} excluded by {paths.config_file}")
+
+
+def _local_files_note(files: LocalFiles | None) -> str:
+    if files is None:
+        return ""
+    count = len(files.matches())
+    if count > files.limit:
+        return f"  + over the limit of {files.limit} local files in {files.root}"
+    return f"  + {count} local file{'' if count == 1 else 's'} in {files.root}"
 
 
 @app.command()
@@ -155,7 +175,7 @@ def ingest(
 
 def _ingest(paths: AppPaths, full: bool, report: Report = ignore) -> list[Document]:
     config = _config_or_exit(paths.config_file)
-    with _github() as client:
+    with _exit_on(TooManyFilesError), _github() as client:
         report(Progress(phase=Phase.DISCOVER))
         return ingest_repos(discover(client, config), paths.raw_dir, client, full, report)
 
@@ -389,7 +409,11 @@ def setup(
     ] = None,
     exclude: Annotated[list[str] | None, typer.Option(help="Leave out the repos matching this glob.")] = None,
     local_root: Annotated[
-        list[Path] | None, typer.Option(help="A folder of checkouts whose .plans/ documents to index.")
+        list[Path] | None, typer.Option(help="A folder of checkouts to search with --local-pattern.")
+    ] = None,
+    local_pattern: Annotated[
+        list[str] | None,
+        typer.Option(help=f"A glob of documents inside each checkout, such as {PLANS_PATTERN}, repeated for more."),
     ] = None,
     replace_config: Annotated[
         bool | None, typer.Option("--replace-config/--keep-config", help="Replace an existing repolore.toml or not.")
@@ -409,7 +433,8 @@ def setup(
     """Set repolore up: check GitHub access, pick the repos for repolore.toml, register the MCP server with the clients
     it finds and start the first refresh.
 
-    Each question has a flag that answers it; --include, --exclude and --local-root together answer the repo picking.
+    Each question has a flag that answers it; --include, --exclude, --local-root and --local-pattern together answer the
+    repo picking.
     """
     paths: AppPaths = ctx.obj
     _print_version(paths)
@@ -421,7 +446,9 @@ def setup(
         raise typer.Exit(1)
     with _exit_on(SelectionError):
         roots = checked_roots(local_root or [])
-    chosen = Config(include=include or [], exclude=exclude or [], local_roots=roots)
+        patterns = checked_patterns(local_pattern or [])
+        require_roots_with_patterns(roots, patterns)
+    chosen = Config(include=include or [], exclude=exclude or [], local_roots=roots, local_patterns=patterns)
     _setup_config(paths.config_file, None if chosen == Config() else chosen, replace_config)
     registered = _setup_clients(register_clients, named)
     _setup_refresh(paths.data_dir, db, first_refresh)
@@ -441,14 +468,15 @@ def _setup_config(config_file: Path, chosen: Config | None, replace: bool | None
 
 def _pick_repos() -> Config:
     roots = typer.prompt(
-        "Folders that hold your checkouts, to index their .plans/ (comma-separated, empty for none)",
+        "Folders that hold your checkouts, to index local documents in them (comma-separated, empty for none)",
         default="",
         show_default=False,
         value_proc=_reasked(parse_roots),
     )
+    patterns = _ask_patterns() if roots else []
     typer.echo("Finding your repos, which takes a few dozen GitHub requests.")
     with _github() as client:
-        found = discover(client, Config(local_roots=roots)).included
+        found = discover(client, Config(local_roots=roots, local_patterns=patterns)).included
     if not found:
         _fail("Found no repos to index.")
     width = max(len(source.name) for source in found)
@@ -461,9 +489,17 @@ def _pick_repos() -> Config:
         default=ALL,
         value_proc=_reasked(lambda answer: parse_selection(answer, names)),
     )
-    config = Config(include=include, local_roots=roots)
+    config = Config(include=include, local_roots=roots, local_patterns=patterns)
     typer.echo(f"Picked {sum(config.selects(name) for name in names)} of {len(names)} repos.")
     return config
+
+
+def _ask_patterns() -> list[str]:
+    return typer.prompt(
+        "Documents to index inside each checkout (comma-separated globs)",
+        default=PLANS_PATTERN,
+        value_proc=_reasked(parse_patterns),
+    )
 
 
 def _reasked[T](parse: Callable[[str], T]) -> Callable[[str], T]:

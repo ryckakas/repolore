@@ -3,9 +3,10 @@ import os
 import re
 from pathlib import Path
 
-from repolore.config import Config
+from repolore.config import Config, relative_pattern
 
 ALL = "all"
+PLANS_PATTERN = ".plans/**/*.md"
 NUMBERS = re.compile(r"(\d+)(?:-(\d+))?")
 
 
@@ -49,10 +50,32 @@ def checked_roots(roots: list[Path]) -> list[Path]:
     return [root if root.expanduser().is_absolute() else Path(os.path.abspath(root)) for root in roots]
 
 
+def parse_patterns(answer: str) -> list[str]:
+    patterns = [part.strip() for part in answer.split(",") if part.strip()]
+    if not patterns:
+        raise SelectionError("name at least one pattern")
+    return checked_patterns(patterns)
+
+
+def checked_patterns(patterns: list[str]) -> list[str]:
+    try:
+        return [relative_pattern(pattern) for pattern in patterns]
+    except ValueError as error:
+        raise SelectionError(str(error)) from error
+
+
+def require_roots_with_patterns(roots: list[Path], patterns: list[str]) -> None:
+    if bool(roots) != bool(patterns):
+        raise SelectionError(
+            "--local-root and --local-pattern go together, "
+            f'such as --local-root ~/projects --local-pattern "{PLANS_PATTERN}"'
+        )
+
+
 def config_text(config: Config) -> str:
     """repolore.toml for the config, with only the keys it sets; JSON's strings and arrays are valid TOML."""
-    keys = {"include": config.include, "exclude": config.exclude, "local_roots": [str(r) for r in config.local_roots]}
-    return "".join(f"{key} = {json.dumps(values, ensure_ascii=False)}\n" for key, values in keys.items() if values)
+    keys = config.model_dump(mode="json", exclude_defaults=True)
+    return "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in keys.items())
 
 
 def write_config(path: Path, config: Config) -> str:

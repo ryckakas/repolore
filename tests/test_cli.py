@@ -30,7 +30,9 @@ from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report
 from repolore.refresh import refresh_status, refreshing
 from repolore.server_state import ServerFiles, registered
+from repolore.setup import PLANS_PATTERN
 from repolore.sources.github import GitHubClient, GitHubError, TokenInfo
+from repolore.sources.local_docs import LocalFiles
 from repolore.store import Hit, connect, index_settings, write_index
 
 runner = CliRunner()
@@ -160,7 +162,7 @@ def test_offline_ingest_prints_counts_per_repo_and_kind(tmp_path: Path, monkeypa
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
-    assert lines[0].split() == ["repo", "pr", "review", "issue", "commit", "doc", "plan"]
+    assert lines[0].split() == ["repo", "pr", "review", "issue", "commit", "doc", "local"]
     assert lines[1].split() == ["ryckakas/crashcause", "2", "0", "2", "1", "2", "0"]
     assert lines[2].split() == ["total", "2", "0", "2", "1", "2", "0"]
 
@@ -230,12 +232,15 @@ def test_ingest_reports_github_errors(tmp_path: Path, monkeypatch: pytest.Monkey
     assert "octo/repo: not found" in result.output
 
 
-def test_repos_lists_each_repo_with_its_scope_and_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repos_lists_each_repo_with_its_scope_and_local_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     checkout = tmp_path / "repo"
+    checkout.mkdir()
+    (checkout / "one.md").write_text("x", encoding="utf-8")
+    (checkout / "two.md").write_text("x", encoding="utf-8")
     discovery = Discovery(
         login="octocat",
         included=[
-            RepoSource("octocat/repo", Scope.OWNED, checkout),
+            RepoSource("octocat/repo", Scope.OWNED, LocalFiles(checkout, ("*.md",), 100)),
             RepoSource("other/project", Scope.CONTRIBUTED),
         ],
         excluded=[RepoSource("octocat/demo", Scope.OWNED), RepoSource("octocat/old", Scope.OWNED)],
@@ -247,7 +252,7 @@ def test_repos_lists_each_repo_with_its_scope_and_plans(tmp_path: Path, monkeypa
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
-    assert lines[0].split() == ["octocat/repo", "owned", "+", "plans", "in", str(checkout)]
+    assert lines[0].split() == ["octocat/repo", "owned", "+", "2", "local", "files", "in", str(checkout)]
     assert lines[1].split() == ["other/project", "contributed"]
     assert lines[2] == "2 repos for octocat"
     assert lines[3].startswith("2 excluded by ")
@@ -259,7 +264,7 @@ def test_repos_lists_the_excluded_repos_on_request(tmp_path: Path, monkeypatch: 
     discovery = Discovery(
         login="octocat",
         included=[RepoSource("octocat/repo", Scope.OWNED)],
-        excluded=[RepoSource("octocat/a-much-longer-name", Scope.MEMBER, tmp_path / "checkout")],
+        excluded=[RepoSource("octocat/a-much-longer-name", Scope.MEMBER, LocalFiles(tmp_path, ("*.md",), 1))],
     )
     ingest_setup(tmp_path, monkeypatch)
     online(monkeypatch, discovery)
@@ -296,7 +301,7 @@ def test_inspect_shows_counts_histogram_and_samples(tmp_path: Path, monkeypatch:
     assert result.exit_code == 0
     lines = [line.split() for line in result.output.splitlines()]
     assert lines[0] == ["7", "documents,", "22", "chunks"]
-    assert lines[1:7] == [["pr", "3"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["plan", "0"]]
+    assert lines[1:7] == [["pr", "3"], ["review", "0"], ["issue", "15"], ["commit", "1"], ["doc", "3"], ["local", "0"]]
     assert lines[7] == ["tokens"]
     buckets = ["1-50", "51-100", "101-200", "201-400", "401-800", "801-2048", "2049-8192", ">8192"]
     assert [line[0] for line in lines[8:16]] == buckets
@@ -1181,16 +1186,55 @@ def setup_run(
 ANSWERED = ["--register", "--refresh"]
 
 
+def test_repos_shows_one_file_and_a_source_over_the_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "one.md").write_text("x", encoding="utf-8")
+    (tmp_path / "two.md").write_text("x", encoding="utf-8")
+    discovery = Discovery(
+        login="octocat",
+        included=[
+            RepoSource("octocat/single", Scope.LOCAL, LocalFiles(tmp_path, ("one.md",), 100)),
+            RepoSource("octocat/wide", Scope.LOCAL, LocalFiles(tmp_path, ("*.md",), 1)),
+        ],
+        excluded=[],
+    )
+    ingest_setup(tmp_path, monkeypatch)
+    online(monkeypatch, discovery)
+
+    result = runner.invoke(app, ["repos"])
+
+    assert result.exit_code == 0
+    assert f"+ 1 local file in {tmp_path}" in result.output
+    assert f"+ over the limit of 1 local files in {tmp_path}" in result.output
+
+
+def test_ingest_over_the_limit_is_one_line_and_exit_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "one.md").write_text("x", encoding="utf-8")
+    discovery = Discovery(
+        login="octocat", included=[RepoSource("o/r", Scope.LOCAL, LocalFiles(tmp_path, ("*.md",), 0))], excluded=[]
+    )
+    ingest_setup(tmp_path, monkeypatch)
+    online(monkeypatch, discovery)
+
+    result = runner.invoke(app, ["ingest"])
+
+    assert result.exit_code == 1
+    assert "max_local_files" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_setup_with_every_flag_asks_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = setup_run(tmp_path, monkeypatch)
     root = tmp_path / "code"
     root.mkdir()
-    flags = ["--include", "me/*", "--include", "org/beta", "--exclude", "me/old", "--local-root", str(root)]
+    flags = ["--include", "me/*", "--include", "org/beta", "--exclude", "me/old"]
+    flags += ["--local-root", str(root), "--local-pattern", "docs/*.md"]
 
     result = runner.invoke(app, ["setup", *flags, *ANSWERED, "--db", "other"])
 
     assert result.exit_code == 0, result.output
-    assert load_config(run.config_file) == Config(include=["me/*", "org/beta"], exclude=["me/old"], local_roots=[root])
+    assert load_config(run.config_file) == Config(
+        include=["me/*", "org/beta"], exclude=["me/old"], local_roots=[root], local_patterns=["docs/*.md"]
+    )
     assert run.discovered == []
     assert run.registered == ["Claude Code"]
     assert run.refreshes == [(run.data_dir, "other")]
@@ -1215,10 +1259,36 @@ def test_setup_writes_a_relative_local_root_flag_as_absolute(tmp_path: Path, mon
     (tmp_path / "code").mkdir()
     monkeypatch.chdir(tmp_path)
 
-    result = runner.invoke(app, ["setup", "--local-root", "code", *ANSWERED])
+    result = runner.invoke(app, ["setup", "--local-root", "code", "--local-pattern", "*.md", *ANSWERED])
 
     assert result.exit_code == 0
     assert load_config(run.config_file).local_roots == [tmp_path / "code"]
+
+
+@pytest.mark.parametrize("flag", ["--local-root", "--local-pattern"])
+def test_setup_refuses_a_local_flag_without_its_partner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+    value = str(tmp_path) if flag == "--local-root" else "*.md"
+
+    result = runner.invoke(app, ["setup", flag, value, *ANSWERED])
+
+    assert result.exit_code == 1
+    assert '--local-pattern ".plans/**/*.md"' in result.output
+    assert not run.config_file.exists()
+
+
+def test_setup_refuses_a_local_pattern_flag_that_leaves_the_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", "--local-root", str(tmp_path), "--local-pattern", "../*.md", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert "relative to the folder" in result.output
+    assert not run.config_file.exists()
 
 
 def test_setup_stops_when_the_token_doesnt_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1299,12 +1369,23 @@ def test_setup_asks_again_for_a_local_root_that_isnt_a_folder(tmp_path: Path, mo
     root = tmp_path / "code"
     root.mkdir()
 
-    result = runner.invoke(app, ["setup", *ANSWERED], input=f"{tmp_path / 'nope'}\n{root}\n2\n")
+    result = runner.invoke(app, ["setup", *ANSWERED], input=f"{tmp_path / 'nope'}\n{root}\n\n2\n")
 
     assert result.exit_code == 0
     assert "Error: not a folder" in result.output
-    assert run.discovered == [Config(local_roots=[root])]
-    assert load_config(run.config_file) == Config(include=["org/beta"], local_roots=[root])
+    chosen = Config(local_roots=[root], local_patterns=[PLANS_PATTERN])
+    assert run.discovered == [chosen]
+    assert load_config(run.config_file) == chosen.model_copy(update={"include": ["org/beta"]})
+
+
+def test_setup_asks_again_for_patterns_that_leave_the_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", *ANSWERED], input=f"{tmp_path}\n../*.md\ndocs/*.md, notes/*.md\n1\n")
+
+    assert result.exit_code == 0, result.output
+    assert "relative to the folder" in result.output
+    assert load_config(run.config_file).local_patterns == ["docs/*.md", "notes/*.md"]
 
 
 def test_setup_with_no_repos_found_stops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

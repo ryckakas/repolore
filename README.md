@@ -19,7 +19,8 @@ middleware?" with the passages that explain it and links to them.
 ## Why this one
 
 - **The history, not just the code.** PR descriptions, review threads, issues, commits that never had a PR, the
-  repos' markdown, and the `.plans/` folders in your local checkouts. The reasons behind code live there.
+  repos' markdown, and the local documents you point it at, such as `.plans/` folders in your checkouts. The
+  reasons behind code live there.
 - **Everything stays on your machine.** It uses your own GitHub token and embeds locally, so no model API key is
   needed, and nothing leaves your machine except GitHub API calls and the one-time model download from GitHub.
 - **Works in your MCP client.** Sessions get `search`, `read`, `list_repos` and `refresh` tools and answer with links
@@ -129,7 +130,9 @@ same way. See [MCP clients](https://github.com/ryckakas/repolore#mcp-clients) fo
    ```toml
    include = ["you/some-repo", "your-org/*"]   # globs over owner/name; every repo when unset
    exclude = ["your-org/old-*"]                # never these
-   local_roots = ["~/projects"]                # checkouts in here add their local .plans/ documents
+   local_roots = ["~/projects"]                # where your checkouts are, up to two levels down
+   local_patterns = [".plans/**/*.md"]         # markdown to index inside each checkout; nothing local when unset
+   checkout_depth = 2                          # optional: how many levels under a root to look
    ```
 
 2. Fetch and index:

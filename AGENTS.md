@@ -7,7 +7,7 @@ this repository. `CLAUDE.md` is a symlink to this file.
 
 `repolore` is a hand-built RAG pipeline over one person's engineering history on GitHub: PR bodies,
 review threads, issues, PR-less commits, repo markdown (`README`, `AGENTS.md`, `docs/**`) and local
-`.plans/` documents. It is searched from a Typer CLI (`search`, `eval`) and served read-only
+documents such as `.plans/`. It is searched from a Typer CLI (`search`, `eval`) and served read-only
 to MCP clients such as Claude Code and Codex through a stdio server. The client writes the answers; repolore itself
 calls no LLM.
 
@@ -49,7 +49,7 @@ uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, 
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh;
-                            # each question has a flag (--include/--exclude/--local-root, --replace-config,
+                            # each question has a flag (--include/--exclude/--local-root/--local-pattern, --replace-config,
                             # --register, --clients, --refresh)
 uv run repolore eval        # score retrieval on the eval questions; --mode, --rerank, --distinct, --show-misses,
                             # --holdout
@@ -116,20 +116,25 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `%APPDATA%\repolore\repolore.toml` (roaming). Data is `%LOCALAPPDATA%\repolore` (local),
   holding the raw API cache and the DB files, and `--data-dir` overrides it. **The repo never
   contains corpus data.** It contains private code, so it stays out of git.
-- `config.py` loads `repolore.toml`: optional `include` / `exclude` globs over `owner/name` and `local_roots`.
-  Without a file, every discovered repo is in.
+- `config.py` loads `repolore.toml`: optional `include` / `exclude` globs over `owner/name`, and `local_roots`,
+  `checkout_depth`, `local_patterns` and `max_local_files` for local documents. Without a file, every discovered
+  repo is in and nothing local is.
 - `discovery.py` decides what to ingest. Repos the viewer owns or reads as a collaborator or org member (forks
   skipped) are fetched whole. Other people's repos found by an `involves:<login>` search are fetched only for the
   viewer's PRs and issues; `repositoriesContributedTo` is not used, because it misses PRs the viewer only commented
   on. The search leaves out each org whose every visible repo is in the viewer's repo list (forks included), so its
   PRs don't fill the search's 1,000 results; forks in those orgs get a search of their own. Private memberships need
-  `read:org`; orgs that can't be read stay in the search. Checkouts directly under `local_roots` that have a `.plans/`
-  folder add their plans, matched to a repo by the `origin` remote, and stay in as plans-only when the repo itself is
-  gone.
+  `read:org`; orgs that can't be read stay in the search. Checkouts under `local_roots` that `local_patterns` match in
+  add those files, matched to a repo by the `origin` remote, and stay in as local-only when the repo itself is gone.
 - `sources/` fetches GitHub data with a sync `httpx` client: GraphQL for PRs, issues, commits, discovery and
   contributions (`github.graphql`), REST for the markdown tree and blobs. `models.py` types the responses. The
   client waits for the rate limit to reset when fewer than 100 points are left, and retries a rate-limited request.
-  `plans.py` scans the local checkouts. Raw responses are cached as `<data-dir>/raw/<owner>/<repo>/*.json`, so
+  `local_docs.py` walks `local_roots` to `checkout_depth`, skipping hidden folders and `node_modules` / `vendor`, and
+  stops at a folder with a `.git` directory: a `.git` file is a worktree or submodule, which doesn't count. A pattern
+  is relative and can't hold `..`. A match must be markdown, outside those folders, and still inside its root once
+  resolved, because `**` follows Windows junctions on Python 3.12. More than `max_local_files` matches for one source
+  stops the run, since a background refresh can't ask. A checkout's `.gitignore` isn't honored: `.plans/` is usually
+  gitignored. Raw responses are cached as `<data-dir>/raw/<owner>/<repo>/*.json`, so
   chunking and embedding never need the network.
 - `ingest.py` syncs the raw cache. A cached repo is fetched incrementally: PRs and issues newest-updated first down
   to the newest cached `updatedAt`, commits `since` the newest cached one, markdown files only when their blob SHA
@@ -138,7 +143,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   rewritten or merged with older commit dates, need `ingest --full`.
 - `documents.py` normalizes into `Document`s. Bots are filtered by GraphQL `author.__typename`,
   not by a login list. Deleted accounts become `ghost`. Review threads a bot started are dropped unless the index
-  is built with `--bot-reviews`. Plans are private `plan` documents with `file://` URLs. A commit is indexed only
+  is built with `--bot-reviews`. Local files are private `local` documents with `file://` URLs. `cached_documents` leaves a local file to the
+  repo's GitHub copy when that has the same path, and keeps one document per URL, since chunk ids are built from it. A
+  commit is indexed only
   when no PR has it: its oid is neither a PR's merge commit nor one of its first 100 commits, whatever the PR's state.
   The history query doesn't ask GitHub per commit, which made its pages up to 3x slower; commits cached while it did
   keep GitHub's answer. A rebase merge gives the commits new oids, so all but the last commit of a rebase-merged PR

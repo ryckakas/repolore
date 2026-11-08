@@ -7,9 +7,9 @@ from typing import Any
 import pytest
 
 from repolore.chunking import chunk_document
-from repolore.documents import GHOST, Document, DocumentKind, Visibility, documents_from, plan_documents
+from repolore.documents import GHOST, Document, DocumentKind, Visibility, documents_from, local_documents
 from repolore.sources.github import RawRepo
-from repolore.sources.plans import PlanFile
+from repolore.sources.local_docs import LocalFile
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CRASHCAUSE = RawRepo.load(FIXTURES / "crashcause")
@@ -350,16 +350,16 @@ def test_external_pull_request_carries_its_discussion() -> None:
     assert "\n\n# Discussion\n\n**benderl:**" in pull.body
 
 
-def test_plans_are_private_documents_of_their_repo() -> None:
-    plan = PlanFile(path=".plans/a/plan.md", url="file:///D:/projects/repo/.plans/a/plan.md", text="# Plan")
+def test_local_files_are_private_documents_of_their_repo() -> None:
+    file = LocalFile(path=".plans/a/plan.md", url="file:///D:/projects/repo/.plans/a/plan.md", text="# Plan")
 
-    documents = plan_documents("ryckakas/crashcause", [plan])
+    documents = local_documents("ryckakas/crashcause", [file])
 
     assert documents == [
         Document(
             url="file:///D:/projects/repo/.plans/a/plan.md",
             repo="ryckakas/crashcause",
-            kind=DocumentKind.PLAN,
+            kind=DocumentKind.LOCAL,
             visibility=Visibility.PRIVATE,
             title=".plans/a/plan.md",
             body="# Plan",
@@ -367,5 +367,5 @@ def test_plans_are_private_documents_of_their_repo() -> None:
     ]
 
 
-def test_no_plans_means_no_plan_documents() -> None:
-    assert plan_documents("ryckakas/crashcause", []) == []
+def test_no_local_files_means_no_documents() -> None:
+    assert local_documents("ryckakas/crashcause", []) == []
