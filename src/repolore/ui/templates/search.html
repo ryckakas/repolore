@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block main %}
+<section>
+  <h2>Search</h2>
+  <form method="post" action="/search" data-into="#hits" data-waiting="Searching. The first search starts the shared server and loads the model, which can take a minute.">
+    <label for="query">What to look for, in plain words</label>
+    <input type="text" id="query" name="query" required autofocus>
+    <div class="filters">
+      <div>
+        <label for="kind">Kind</label>
+        <select id="kind" name="kind">
+          <option value="">Any</option>
+          {% for kind in kinds %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="repo">Repo, as owner/name</label>
+        <input type="text" id="repo" name="repo" spellcheck="false">
+      </div>
+    </div>
+    <button type="submit">Search</button>
+  </form>
+  <div id="hits" class="result" aria-live="polite"></div>
+</section>
+{% endblock %}

@@ -147,6 +147,7 @@ label {
 }
 
 input[type="text"],
+select,
 textarea {
   display: block;
   width: 100%;
@@ -186,6 +187,45 @@ textarea {
 .folders form {
   flex: none;
   margin: 0;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1rem;
+}
+
+.filters > div:last-child {
+  flex: 1 1 14rem;
+}
+
+.hits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.hits li {
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.hits li:first-child {
+  border-top: 0;
+}
+
+.hits h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.hits p {
+  margin: 0.15rem 0 0;
+}
+
+.hit-text {
+  white-space: pre-wrap;
 }
 
 form:has([name="every"]:checked) .repos {

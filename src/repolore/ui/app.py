@@ -23,6 +23,7 @@ from repolore.refresh import refresh_status, start_refresh
 from repolore.server_state import HOST, ServerFiles
 from repolore.ui.client_pages import ClientPages
 from repolore.ui.rendering import render
+from repolore.ui.search_page import SearchPage
 from repolore.ui.setup_pages import SetupPages
 
 HERE = Path(__file__).parent
@@ -124,12 +125,15 @@ def create_app(paths: AppPaths, db: str, token: str) -> Starlette:
     pages = Pages(paths, db)
     setup = SetupPages(paths, db)
     clients = ClientPages(db)
+    search = SearchPage(paths, db)
     return Starlette(
         routes=[
             Route("/", pages.status),
             Route("/refresh", pages.refresh_state),
             Route("/refresh", pages.refresh, methods=["POST"]),
             Route("/checks", pages.checks, methods=["POST"]),
+            Route("/search", search.page),
+            Route("/search", search.search, methods=["POST"]),
             Route("/setup", setup.page),
             Route("/setup/repos", setup.repos),
             Route("/setup/repos", setup.save_repos, methods=["POST"]),

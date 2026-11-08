@@ -409,7 +409,7 @@ def ui(
     browser: Annotated[bool, typer.Option(help="Open the page in the default browser.")] = True,
     db: IndexOption = DEFAULT_INDEX,
 ) -> None:
-    """Show repolore's status and set it up in a local web page, until Ctrl-C."""
+    """Show repolore's status, set it up and search in a local web page, until Ctrl-C."""
     _serve_page(ctx.obj, db, browser)
 
 
