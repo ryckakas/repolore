@@ -17,7 +17,7 @@ from typer.testing import CliRunner, Result
 from repolore import __version__, cli, relay, shared_server
 from repolore.chunking import Chunk
 from repolore.cli import MISS_HITS, PLUGIN_REFRESH_HOURS, app
-from repolore.clients import PLUGIN_SERVER, McpClient, Registration, RegistrationError
+from repolore.clients import PLUGIN_SERVER, Entry, McpClient, RegistrationError
 from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.doctor import Check
@@ -1137,29 +1137,43 @@ class SetupRun:
     refreshes: list[tuple[Path, str]] = field(default_factory=list)
 
 
+Listed = list[Entry] | Exception | None
+USER_ENTRY = Entry("repolore", ("repolore-mcp",), "user", "x")
+
+
 def setup_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     config: str | None = None,
     access: tuple[Check, TokenInfo | None] = (Check("GitHub", True, "octocat"), WORKING_TOKEN),
-    found: dict[str, Registration | None] | None = None,
+    found: dict[str, Listed] | None = None,
+    refusal: Exception | None = None,
     refreshing_already: bool = False,
 ) -> SetupRun:
     data_dir = ingest_setup(tmp_path, monkeypatch, config)
     run = SetupRun(tmp_path / "repolore.toml", data_dir.resolve(), online(monkeypatch, FOUND))
-    registrations = found or {"Claude Code": Registration(found=False), "Codex": None}
+    listed: dict[str, Listed] = found or {"Claude Code": [], "Codex": None}
 
-    def register(client: McpClient) -> str:
-        run.registered.append(client.name)
-        return "for every project (user scope)"
+    def client(name: str, known: Listed) -> McpClient:
+        def entries() -> list[Entry]:
+            if isinstance(known, Exception):
+                raise known
+            return known or []
+
+        def add() -> str:
+            if refusal is not None:
+                raise refusal
+            run.registered.append(name)
+            return "for every project (user scope)"
+
+        return McpClient(name, lambda: known is not None, entries, add, "add it")
 
     def start_refresh(data_dir: Path, db: str) -> bool:
         run.refreshes.append((data_dir, db))
         return not refreshing_already
 
     monkeypatch.setattr(cli, "github_access", lambda _: access)
-    monkeypatch.setattr(cli, "registration", lambda client: registrations[client.name])
-    monkeypatch.setattr(cli, "register", register)
+    monkeypatch.setattr(cli, "CLIENTS", tuple(client(name, known) for name, known in listed.items()))
     monkeypatch.setattr(cli, "start_refresh", start_refresh)
     return run
 
@@ -1182,7 +1196,7 @@ def test_setup_with_every_flag_asks_nothing(tmp_path: Path, monkeypatch: pytest.
     assert run.refreshes == [(run.data_dir, "other")]
     assert "✓ GitHub: octocat" in result.output
     assert "Claude Code: registered repolore for every project (user scope)." in result.output
-    assert "Codex: `codex` isn't on PATH, skipped." in result.output
+    assert "Codex: not found, skipped." in result.output
     assert f"Refreshing in the background; `repolore doctor` shows how far it got, and {run.data_dir}" in result.output
 
 
@@ -1306,9 +1320,9 @@ def test_setup_with_no_repos_found_stops(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_setup_leaves_registered_clients_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    found: dict[str, Registration | None] = {
-        "Claude Code": Registration(found=True, status="✓ Connected"),
-        "Codex": Registration(found=True, status="✗ Failed to connect"),
+    found: dict[str, Listed] = {
+        "Claude Code": [USER_ENTRY],
+        "Codex": [Entry("mine", ("repolore-mcp",), "user", "x")],
     }
     run = setup_run(tmp_path, monkeypatch, found=found)
 
@@ -1316,16 +1330,13 @@ def test_setup_leaves_registered_clients_alone(tmp_path: Path, monkeypatch: pyte
 
     assert result.exit_code == 0
     assert run.registered == []
-    assert "Claude Code: repolore is already registered (✓ Connected)." in result.output
-    assert (
-        "Codex: repolore is already registered (✗ Failed to connect); `repolore doctor` says how to fix it."
-        in result.output
-    )
+    assert "Claude Code: repolore is already registered.\n" in result.output
+    assert "Codex: repolore is already registered as mine.\n" in result.output
 
 
 def test_setup_names_the_plugin_when_it_registered_repolore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    found: dict[str, Registration | None] = {
-        "Claude Code": Registration(found=True, status="✓ Connected", name=PLUGIN_SERVER),
+    found: dict[str, Listed] = {
+        "Claude Code": [Entry(PLUGIN_SERVER, ("repolore-mcp",), "plugin", "x")],
         "Codex": None,
     }
     run = setup_run(tmp_path, monkeypatch, found=found)
@@ -1334,7 +1345,41 @@ def test_setup_names_the_plugin_when_it_registered_repolore(tmp_path: Path, monk
 
     assert result.exit_code == 0
     assert run.registered == []
-    assert "Claude Code: repolore is already registered as plugin:repolore:repolore (✓ Connected)." in result.output
+    assert "Claude Code: repolore is already registered as plugin:repolore:repolore.\n" in result.output
+
+
+def test_setup_registers_for_everyone_despite_an_entry_for_this_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_only = Entry("repolore", ("repolore-mcp",), "project", "x", for_every_project=False)
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": [project_only]})
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert run.registered == ["Claude Code"]
+
+
+def test_setup_ignores_a_client_listing_only_other_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": [Entry("other", ("other-cmd",), "user", "x")]})
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 0
+    assert run.registered == ["Claude Code"]
+
+
+def test_setup_doesnt_register_when_it_cant_list_a_clients_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": RegistrationError("can't read .claude.json")})
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
+
+    assert result.exit_code == 1
+    assert run.registered == []
+    assert "Claude Code: couldn't register repolore: can't read .claude.json" in result.output
+    assert run.refreshes
 
 
 @pytest.mark.parametrize(
@@ -1343,11 +1388,7 @@ def test_setup_names_the_plugin_when_it_registered_repolore(tmp_path: Path, monk
 def test_a_failed_registration_fails_setup_after_the_refresh_starts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
-    def refuse(_: McpClient) -> str:
-        raise error
-
-    run = setup_run(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "register", refuse)
+    run = setup_run(tmp_path, monkeypatch, refusal=error)
 
     result = runner.invoke(app, ["setup", "--include", "me/*", *ANSWERED])
 
@@ -1357,13 +1398,11 @@ def test_a_failed_registration_fails_setup_after_the_refresh_starts(
 
 
 def test_setup_without_registering_doesnt_check_the_clients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    run = setup_run(tmp_path, monkeypatch)
-    monkeypatch.setattr(cli, "registration", pytest.fail)
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": AssertionError("listed")})
 
     result = runner.invoke(app, ["setup", "--include", "me/*", "--no-register", "--refresh"])
 
     assert result.exit_code == 0
-    assert "Checking the MCP clients" not in result.output
     assert run.registered == []
     assert run.refreshes
 

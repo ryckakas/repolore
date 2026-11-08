@@ -243,9 +243,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
 - `doctor.py` is `repolore doctor`: sqlite-vec, GitHub access, `repolore.toml`, the index, its model files (by size,
   not hash), the last refresh, the shared server and the MCP clients' registrations. The GitHub check is its one
   request (`GitHubClient.token_info`, which reads the token's scopes and rate limit from the response headers and
-  never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` asks
-  each MCP client CLI on PATH (`claude`, `codex`) with `mcp get repolore`, and Claude Code also with
-  `mcp get plugin:repolore:repolore`, the plugin's server; Claude Code starts the server to check it.
+  never waits for the limit), so it can't count what `repolore.toml` selects; `repolore repos` does. `clients.py` finds
+  every registration of repolore in each installed client from its configuration, by name or by the command it runs,
+  without starting a server: Claude Code's user, local and project scopes plus `claude plugin list --json`, and Codex's
+  `config.toml` files. One registration is checked with `claude mcp get` on Claude Code, which starts the server; other
+  clients can't be checked. More than one fails, naming each and how to remove it. A client without repolore warns.
 - `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
   local roots, and writing `repolore.toml`. The command reuses doctor's GitHub check and stops only when the token
   doesn't work. `clients.py` registers repolore: `claude mcp add --scope user`, and for Codex an entry appended to

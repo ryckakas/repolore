@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from repolore import __version__
 from repolore.chunking import Chunk, chunk_document, chunk_limit, count_split_sections
-from repolore.clients import CLIENTS, McpClient, RegistrationError, register, registration
+from repolore.clients import CLIENTS, McpClient, RegistrationError, repolore_entries
 from repolore.config import Config, load_config
 from repolore.discovery import discover
 from repolore.doctor import diagnose, github_access
@@ -477,7 +477,6 @@ def _asked(flag: bool | None, question: str, default: bool) -> bool:
 def _setup_clients(answer: bool | None) -> bool:
     if answer is False:
         return True
-    typer.echo("Checking the MCP clients; Claude Code starts repolore to check it, which takes a few seconds.")
     registered = True
     for client in CLIENTS:
         try:
@@ -489,15 +488,14 @@ def _setup_clients(answer: bool | None) -> bool:
 
 
 def _setup_client(client: McpClient, answer: bool | None) -> None:
-    found = registration(client)
-    if found is None:
-        typer.echo(f"{client.name}: `{client.command}` isn't on PATH, skipped.")
-    elif found.found:
-        status = f" ({found.status})" if found.status else ""
-        hint = "" if found.healthy else "; `repolore doctor` says how to fix it"
-        typer.echo(f"{client.name}: repolore is already registered{found.alias}{status}{hint}.")
+    if not client.present():
+        typer.echo(f"{client.name}: not found, skipped.")
+        return
+    existing = [entry for entry in repolore_entries(client) if entry.for_every_project]
+    if existing:
+        typer.echo(f"{client.name}: repolore is already registered{existing[0].alias}.")
     elif _asked(answer, f"Register repolore with {client.name}?", default=True):
-        typer.echo(f"{client.name}: registered repolore {register(client)}.")
+        typer.echo(f"{client.name}: registered repolore {client.add()}.")
 
 
 def _setup_refresh(data_dir: Path, db: str, answer: bool | None) -> None:
