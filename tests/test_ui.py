@@ -19,6 +19,7 @@ INDEX_LINE = "chunks from"
 
 
 def client_of(paths: AppPaths) -> TestClient:
+    paths.config_file.touch()
     return TestClient(create_app(paths, "default", TOKEN), base_url=BASE, follow_redirects=False)
 
 
@@ -60,6 +61,15 @@ def test_the_cookie_opens_the_page(browser: TestClient) -> None:
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
+
+
+def test_a_first_run_with_no_config_opens_on_setup(browser: TestClient, data_paths: AppPaths) -> None:
+    data_paths.config_file.unlink()
+
+    response = browser.get("/")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/setup"
 
 
 def test_the_token_works_for_the_whole_run(data_paths: AppPaths) -> None:

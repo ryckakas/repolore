@@ -163,7 +163,7 @@ repolore search "why did we drop the retry middleware?"
 repolore search "rate limit handling" --repo you/some-repo --kind pr -k 10
 repolore refresh          # fetch what changed and rebuild the index with its recorded settings
 repolore doctor           # check every part of the setup, with the fix for each failure
-repolore ui               # the index, the last refresh and doctor's checks in a local web page, until Ctrl-C
+repolore ui               # a local web page for the status, doctor's checks, the repos and local documents, until Ctrl-C
 repolore server status    # the shared MCP server; `repolore server stop` stops it
 ```
 

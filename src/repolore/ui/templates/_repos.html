@@ -1,0 +1,27 @@
+<ul class="checks">
+  {% with check = github %}{% include "_check.html" %}{% endwith %}
+</ul>
+{% if notice is defined %}{% include "_notice.html" %}{% endif %}
+{% if rows is none %}
+<p><a href="/setup">Check again</a></p>
+{% elif not rows %}
+<p class="muted">GitHub lists no repos for this account.</p>
+{% else %}
+<form method="post" action="/setup/repos" data-into="#repos-result" data-waiting="Saving…">
+  {% if replaced %}
+  <p class="notice">Saving replaces these entries in repolore.toml with the ticked names: {{ replaced | join(", ") }}</p>
+  {% endif %}
+  <p class="muted">The first refresh embeds every picked repo on this machine, which takes a while, so start with a few.</p>
+  <label><input type="checkbox" name="every"{% if every %} checked{% endif %}> Every repo, now and later (ignores the ticks below)</label>
+  <ul class="repos">
+    {% for row in rows %}
+    <li>
+      <label><input type="checkbox" name="repo" value="{{ row.name }}"{% if row.ticked %} checked{% endif %}> {{ row.name }} <span class="muted">{{ row.scope }}</span></label>
+      <input type="hidden" name="shown" value="{{ row.name }}">
+    </li>
+    {% endfor %}
+  </ul>
+  <button type="submit">Save repos</button>
+</form>
+<div id="repos-result" class="result" aria-live="polite"></div>
+{% endif %}

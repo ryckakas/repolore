@@ -6,16 +6,20 @@ async function text(url, options) {
   return response.text();
 }
 
-function loadInto(form) {
-  const target = document.querySelector(form.dataset.into);
-  target.textContent = form.dataset.waiting;
-  text(form.action, { method: "POST" })
+function fill(target, url, options) {
+  text(url, options)
     .then((html) => {
       target.innerHTML = html;
     })
     .catch(() => {
       target.textContent = UNREACHABLE;
     });
+}
+
+function submitInto(form) {
+  const target = document.querySelector(form.dataset.into);
+  target.textContent = form.dataset.waiting;
+  fill(target, form.action, { method: "POST", body: new URLSearchParams(new FormData(form)) });
 }
 
 async function pollRefresh() {
@@ -37,11 +41,15 @@ async function pollRefresh() {
   document.querySelector("#refresh").replaceWith(holder.firstElementChild);
 }
 
-for (const form of document.querySelectorAll("form[data-into]")) {
-  form.addEventListener("submit", (event) => {
+document.addEventListener("submit", (event) => {
+  if (event.target.matches("form[data-into]")) {
     event.preventDefault();
-    loadInto(form);
-  });
+    submitInto(event.target);
+  }
+});
+
+for (const target of document.querySelectorAll("[data-load]")) {
+  fill(target, target.dataset.load);
 }
 
 if (document.querySelector("#refresh[data-running]")) {

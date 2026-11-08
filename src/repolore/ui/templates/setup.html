@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block main %}
+{% if config_error is defined %}
+<p class="notice" role="alert">{{ config_file }} can't be read, so nothing here can save until it's fixed: {{ config_error }}</p>
+{% else %}
+<section>
+  <h2>GitHub and repos</h2>
+  <div id="repos" data-load="/setup/repos" aria-live="polite">Asking GitHub for your repos, which can take a minute…</div>
+</section>
+<section>
+  <h2>Local documents</h2>
+  <p class="muted">Markdown in your checkouts, such as plans that are never pushed. Saved in <code>{{ config_file }}</code>.</p>
+  <form method="post" action="/setup/local" data-into="#local-result" data-waiting="Saving…">
+    <label for="roots">Folders that hold your checkouts, one per line, absolute or starting with ~</label>
+    <textarea id="roots" name="roots" rows="3" spellcheck="false">{{ roots }}</textarea>
+    <label for="patterns">Documents inside each checkout, one glob per line, such as {{ example_pattern }}</label>
+    <textarea id="patterns" name="patterns" rows="3" spellcheck="false">{{ patterns }}</textarea>
+    <button type="submit">Save local documents</button>
+  </form>
+  <div id="local-result" class="result" aria-live="polite"></div>
+</section>
+{% endif %}
+{% endblock %}

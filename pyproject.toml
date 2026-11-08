@@ -35,10 +35,12 @@ dependencies = [
     "onnxruntime>=1.31.1",
     "platformdirs>=4.14.0",
     "pydantic>=2.14.2",
+    "python-multipart>=0.0.32",
     "pyyaml>=6.0.3",
     "sqlite-vec>=0.1.9,<0.2",
     "starlette>=1.10.0",
     "tokenizers>=0.23.3",
+    "tomlkit>=0.13",
     "typer>=0.27.3",
     "uvicorn>=0.54.0",
 ]

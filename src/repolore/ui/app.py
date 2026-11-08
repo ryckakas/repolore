@@ -15,14 +15,14 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
-from starlette.templating import Jinja2Templates
 from starlette.types import ASGIApp
 
-from repolore import __version__
 from repolore.doctor import Check, diagnose, index_check, refresh_check, server_check
 from repolore.paths import AppPaths
 from repolore.refresh import refresh_status, start_refresh
 from repolore.server_state import HOST, ServerFiles
+from repolore.ui.rendering import render
+from repolore.ui.setup_pages import SetupPages
 
 HERE = Path(__file__).parent
 TOKEN_PARAMETER = "token"
@@ -38,8 +38,6 @@ HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
 }
-
-templates = Jinja2Templates(directory=HERE / "templates")
 
 
 class Guard(BaseHTTPMiddleware):
@@ -94,10 +92,12 @@ class Pages:
         self._db = db
 
     def status(self, request: Request) -> Response:
+        if not self._paths.config_file.exists():
+            return RedirectResponse("/setup", status_code=303)
         return self._status_page(request)
 
     def refresh_state(self, request: Request) -> Response:
-        return self._render(request, "_refresh.html", **self._refresh())
+        return render(request, self._db, "_refresh.html", **self._refresh())
 
     def refresh(self, request: Request) -> Response:
         try:
@@ -107,31 +107,31 @@ class Pages:
         return RedirectResponse("/", status_code=303)
 
     def checks(self, request: Request) -> Response:
-        return self._render(request, "_checks.html", checks=list(diagnose(self._paths, self._db)))
+        return render(request, self._db, "_checks.html", checks=list(diagnose(self._paths, self._db)))
 
     def _status_page(self, request: Request, notice: str | None = None, status_code: int = 200) -> Response:
         files = ServerFiles(self._paths.data_dir, self._db)
         checks: list[Check] = [index_check(self._paths.index_file(self._db)), server_check(files)]
-        return self._render(request, "status.html", status_code, checks=checks, notice=notice, **self._refresh())
+        return render(request, self._db, "status.html", status_code, checks=checks, notice=notice, **self._refresh())
 
     def _refresh(self) -> dict[str, Any]:
         data_dir = self._paths.data_dir
         return {"refresh": refresh_check(data_dir), "running": refresh_status(data_dir).running}
 
-    def _render(self, request: Request, template: str, status_code: int = 200, **context: Any) -> Response:
-        return templates.TemplateResponse(
-            request, template, {"version": __version__, "db": self._db, **context}, status_code=status_code
-        )
-
 
 def create_app(paths: AppPaths, db: str, token: str) -> Starlette:
     pages = Pages(paths, db)
+    setup = SetupPages(paths, db)
     return Starlette(
         routes=[
             Route("/", pages.status),
             Route("/refresh", pages.refresh_state),
             Route("/refresh", pages.refresh, methods=["POST"]),
             Route("/checks", pages.checks, methods=["POST"]),
+            Route("/setup", setup.page),
+            Route("/setup/repos", setup.repos),
+            Route("/setup/repos", setup.save_repos, methods=["POST"]),
+            Route("/setup/local", setup.save_local, methods=["POST"]),
             Mount("/static", StaticFiles(directory=HERE / "static")),
         ],
         middleware=[

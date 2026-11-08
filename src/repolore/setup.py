@@ -2,12 +2,15 @@ import json
 import os
 import re
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import tomlkit
 from pydantic import ValidationError
 
-from repolore.config import Config, load_config, relative_pattern
+from repolore.config import Config, absolute_path, load_config, relative_pattern
+from repolore.config_files import replace_file
 
 ALL = "all"
 PLANS_PATTERN = ".plans/**/*.md"
@@ -16,6 +19,22 @@ NUMBERS = re.compile(r"(\d+)(?:-(\d+))?")
 
 class SelectionError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class RepoTicks:
+    """What the setup page's repo form was showing and what was ticked when it was saved."""
+
+    shown: list[str]
+    ticked: list[str]
+    every: bool
+
+
+@dataclass(frozen=True)
+class RepoChange:
+    saved: bool
+    added: int = 0
+    leaving: int = 0
 
 
 def parse_selection(answer: str, names: list[str]) -> list[str]:
@@ -100,6 +119,57 @@ def config_text(config: Config) -> str:
 
 def _toml_lines(keys: dict[str, Any]) -> str:
     return "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in keys.items())
+
+
+def save_ticks(path: Path, ticks: RepoTicks) -> RepoChange:
+    """Write what the ticks select to include and exclude, unless that's what the file already selects."""
+    existed = path.exists()
+    config = load_config(path)
+    before = {name for name in ticks.shown if existed and config.selects(name)}
+    after = set(ticks.shown) if ticks.every else set(ticks.shown) & set(ticks.ticked)
+    if not after and not ticks.every:
+        raise SelectionError("Tick at least one repo, or choose every repo.")
+    was_every = existed and not config.include and not config.exclude
+    if existed and after == before and ticks.every == was_every:
+        return RepoChange(saved=False)
+    update_config(path, {"include": [] if ticks.every else sorted(after), "exclude": []})
+    return RepoChange(saved=True, added=len(after - before), leaving=len(before - after))
+
+
+def save_local_settings(path: Path, roots: list[str], patterns: list[str]) -> None:
+    """Write the local roots and patterns typed on the setup page, which has no working directory to resolve against."""
+    load_config(path)
+    if bool(roots) != bool(patterns):
+        raise SelectionError(f"Give folders and patterns together, such as {PLANS_PATTERN}, or neither.")
+    try:
+        checked = checked_roots([absolute_path(Path(root)) for root in roots])
+    except ValueError as error:
+        raise SelectionError(str(error)) from error
+    valid_patterns = checked_patterns(patterns)
+    # A file with no include selects every repo, so only saving the repos may create it.
+    if not path.exists():
+        raise SelectionError("Save your repos first, then the local documents.")
+    update_config(path, {"local_roots": [str(root) for root in checked], "local_patterns": valid_patterns})
+
+
+def update_config(path: Path, keys: dict[str, list[str]]) -> None:
+    """Change only these keys, keeping the file's comments and its other keys; an empty list removes a key."""
+    target = path.resolve()
+    existed = target.exists()
+    if existed and not os.access(target, os.W_OK):
+        raise PermissionError(f"{target} is read-only")
+    document = tomlkit.parse(target.read_text(encoding="utf-8")) if existed else tomlkit.document()
+    for key, value in keys.items():
+        # Assigning an equal value would still rewrite the array and lose the comments inside it.
+        if value == document.get(key, []):
+            continue
+        if value:
+            document[key] = value
+        else:
+            document.pop(key, None)
+    text = tomlkit.dumps(document)
+    Config.model_validate(tomllib.loads(text))
+    replace_file(target, text.encode("utf-8"), existed)
 
 
 def write_config(path: Path, config: Config) -> str:
