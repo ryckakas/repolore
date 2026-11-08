@@ -1337,6 +1337,21 @@ def test_setup_replaces_an_existing_config_when_told(tmp_path: Path, monkeypatch
     assert f'Wrote {run.config_file}:\ninclude = ["org/*"]' in result.output
 
 
+def test_setup_replacing_a_config_keeps_its_folders_and_shows_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = 'include = ["me/alpha"]\n\n[[local_folders]]\nname = "notes"\npath = "~/notes"\n'
+    run = setup_run(tmp_path, monkeypatch, old)
+
+    result = runner.invoke(app, ["setup", "--include", "org/*", "--replace-config", *ANSWERED])
+
+    assert result.exit_code == 0, result.output
+    config = load_config(run.config_file)
+    assert config.include == ["org/*"]
+    assert [folder.repo for folder in config.local_folders] == ["local/notes"]
+    assert "[[local_folders]]" in result.output
+
+
 def test_setup_lists_the_repos_and_asks_again_until_the_pick_is_valid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -14,7 +14,7 @@ from repolore.sources.github import (
     viewer_organizations,
     viewer_repositories,
 )
-from repolore.sources.local_docs import LocalFiles, find_checkouts
+from repolore.sources.local_docs import LocalFiles, find_checkouts, find_folders
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ def discover(client: GitHubClient, config: Config) -> Discovery:
     for name, files in find_checkouts(config).items():
         known = found.get(name.lower())
         found[name.lower()] = replace(known, local=files) if known else RepoSource(name, Scope.LOCAL, files)
+    for name, files in find_folders(config).items():
+        found[name.lower()] = RepoSource(name, Scope.LOCAL, files)
     sources = sorted(found.values(), key=lambda source: source.name.lower())
     return Discovery(
         login=login,

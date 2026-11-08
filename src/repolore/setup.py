@@ -1,9 +1,13 @@
 import json
 import os
 import re
+import tomllib
 from pathlib import Path
+from typing import Any
 
-from repolore.config import Config, relative_pattern
+from pydantic import ValidationError
+
+from repolore.config import Config, load_config, relative_pattern
 
 ALL = "all"
 PLANS_PATTERN = ".plans/**/*.md"
@@ -72,9 +76,29 @@ def require_roots_with_patterns(roots: list[Path], patterns: list[str]) -> None:
         )
 
 
+def with_unasked_settings(config: Config, replaced_file: Path) -> Config:
+    """The config plus what setup can't ask about from the file it replaces, unless that file can't be read."""
+    try:
+        old = load_config(replaced_file)
+    except (tomllib.TOMLDecodeError, ValidationError, UnicodeDecodeError):
+        return config
+    return config.model_copy(
+        update={
+            "local_folders": old.local_folders,
+            "checkout_depth": old.checkout_depth,
+            "max_local_files": old.max_local_files,
+        }
+    )
+
+
 def config_text(config: Config) -> str:
     """repolore.toml for the config, with only the keys it sets; JSON's strings and arrays are valid TOML."""
     keys = config.model_dump(mode="json", exclude_defaults=True)
+    folders = keys.pop("local_folders", [])
+    return _toml_lines(keys) + "".join(f"\n[[local_folders]]\n{_toml_lines(folder)}" for folder in folders)
+
+
+def _toml_lines(keys: dict[str, Any]) -> str:
     return "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in keys.items())
 
 

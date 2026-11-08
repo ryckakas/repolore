@@ -57,6 +57,7 @@ from repolore.setup import (
     parse_roots,
     parse_selection,
     require_roots_with_patterns,
+    with_unasked_settings,
     write_config,
 )
 from repolore.sources.github import GitHubClient, GitHubError, resolve_token
@@ -462,7 +463,7 @@ def _setup_config(config_file: Path, chosen: Config | None, replace: bool | None
         if not _asked(replace, "Replace it?", default=False):
             typer.echo("Keeping it; `repolore repos` shows what it selects.")
             return
-    text = write_config(config_file, chosen or _pick_repos())
+    text = write_config(config_file, with_unasked_settings(chosen or _pick_repos(), config_file))
     typer.echo(f"Wrote {config_file}:\n{text}" if text else f"Wrote an empty {config_file}: every repo found is in.")
 
 
