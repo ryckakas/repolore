@@ -48,7 +48,7 @@ uv run repolore session-start  # what the plugin's SessionStart hook runs: a bac
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
-uv run repolore ui          # a local web page with the status, Refresh now and doctor's checks, until Ctrl-C;
+uv run repolore ui          # a local web page with the status, doctor's checks and the setup forms, until Ctrl-C;
                             # --no-browser only prints its address
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh;
                             # each question has a flag (--include/--exclude/--local-root/--local-pattern, --replace-config,
@@ -272,8 +272,13 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   needs that cookie on every request and an `Origin` equal to `http://<Host>` on every POST, and
   `TrustedHostMiddleware` the Host `127.0.0.1`. A strict CSP allows no inline script or style. `Referrer-Policy` must
   stay `same-origin`: under `no-referrer`, browsers send `Origin: null` on a form POST. Doctor's checks run on a button
-  and not on page load, because checking Claude Code starts the shared server and so the model.
-- `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
+  and not on page load, because checking Claude Code starts the shared server and so the model. `ui/setup_pages.py` has
+  the setup forms: GitHub and the repo list load as a fragment, since listing takes dozens of requests, and a form
+  comes back as a fragment too, so a save needs no second listing. Each repo row posts a hidden `shown` field, which is
+  how a save knows what was on the form. `setup.update_config` edits only the keys a form owns through `tomlkit`,
+  keeping comments, and checks the result still loads before replacing the file. Only saving the repos may create
+  `repolore.toml`, because a file with no `include` selects every repo.
+- `setup.py` holds what `repolore setup` and the page's forms need besides prompts: parsing the repo pick (numbers, ranges, globs) and the
   local roots, and writing `repolore.toml`, which keeps the settings setup can't ask about when it replaces a file. The command reuses doctor's GitHub check and stops only when the token
   doesn't work. `clients.py` has one table of the clients it knows, `--clients` picking some by key: Claude Code and
   Devin CLI through their own `mcp add`, Codex by appending to `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp
@@ -302,7 +307,7 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   `mcp__plugin_repolore_repolore__*` unless a user-scope `repolore` with the same command wins. `tests/test_plugin.py`
   checks the files against the code; `claude plugin validate .` checks them against Claude Code.
 
-Nothing is async except the relay's forwarding, the shared server's watcher, which live on the SDK's event loop, and the `ui` page's middleware:
+Nothing is async except the relay's forwarding, the shared server's watcher, which live on the SDK's event loop, and the `ui` page's middleware and form handlers:
 the MCP SDK runs the plain `def` tools on worker threads (40, shared by every session), and the rest of the pipeline
 is synchronous on purpose. `LocalEmbedder` locks its lazy model load because those threads can search in parallel.
 

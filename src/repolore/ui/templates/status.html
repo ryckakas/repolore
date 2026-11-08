@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block main %}
-{% if notice %}<p class="notice" role="alert">{{ notice }}</p>{% endif %}
+{% if notice %}{% include "_notice.html" %}{% endif %}
 <section>
   <h2>Status</h2>
   {% include "_checks.html" %}

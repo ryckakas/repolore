@@ -22,7 +22,7 @@ def relative_pattern(pattern: str) -> str:
 LocalPattern = Annotated[str, AfterValidator(relative_pattern)]
 
 
-def _absolute_path(path: Path) -> Path:
+def absolute_path(path: Path) -> Path:
     # A refresh runs in the data dir, so a relative path would quietly look there.
     try:
         absolute = path.expanduser().is_absolute()
@@ -37,7 +37,7 @@ class LocalFolder(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]*[A-Za-z0-9_-]$")]
-    path: Annotated[Path, AfterValidator(_absolute_path)]
+    path: Annotated[Path, AfterValidator(absolute_path)]
     patterns: Annotated[list[LocalPattern], Field(min_length=1)] = ["**/*.md"]
 
     @property

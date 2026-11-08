@@ -47,7 +47,7 @@ def add_entry(path: Path, keys: Sequence[str], name: str, entry: Mapping[str, An
         raise ConfigFileError(f"can't add {name} to {path}: {error}") from error
     if existed:
         _keep_first_copy(target)
-    _replace(target, mark + updated.encode("utf-8"), existed)
+    replace_file(target, mark + updated.encode("utf-8"), existed)
 
 
 def with_entry(text: str, keys: Sequence[str], name: str, entry: Mapping[str, Any]) -> str:
@@ -153,7 +153,7 @@ def _keep_first_copy(target: Path) -> None:
         shutil.copy2(target, backup)
 
 
-def _replace(target: Path, content: bytes, existed: bool) -> None:
+def replace_file(target: Path, content: bytes, existed: bool) -> None:
     partial = target.with_name(target.name + PARTIAL_SUFFIX)
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
