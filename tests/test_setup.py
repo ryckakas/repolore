@@ -12,12 +12,14 @@ from repolore.setup import (
     RepoChange,
     RepoTicks,
     SelectionError,
+    add_local_folder,
     checked_patterns,
     checked_roots,
     config_text,
     parse_patterns,
     parse_roots,
     parse_selection,
+    remove_local_folder,
     require_roots_with_patterns,
     save_local_settings,
     save_ticks,
@@ -551,3 +553,173 @@ def test_a_root_that_isnt_a_folder_is_refused(tmp_path: Path) -> None:
 def test_a_bad_pattern_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SelectionError, match="relative"):
         save_local_settings(tmp_path / "repolore.toml", [str(tmp_path)], ["../outside"])
+
+
+PICKED = 'include = ["me/alpha"]\n'
+TWO_FOLDERS = """# why these repos
+include = ["me/alpha"]
+
+# my folders
+[[local_folders]]
+name = "first" # the old one
+path = "~/first"
+
+[[local_folders]]
+name = "second"
+path = "~/second"
+"""
+
+
+def test_a_local_folder_is_added_with_the_default_patterns(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, PICKED)
+
+    add_local_folder(path, "notes", str(tmp_path), [])
+
+    assert load_config(path) == Config(include=["me/alpha"], local_folders=[LocalFolder(name="notes", path=tmp_path)])
+    assert "patterns" not in tomllib.loads(path.read_text(encoding="utf-8"))["local_folders"][0]
+
+
+def test_a_local_folder_keeps_its_patterns_and_can_be_one_file(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, PICKED)
+
+    add_local_folder(path, "picked", str(path), ["docs/*.md", "*.txt"])
+
+    assert load_config(path).local_folders == [LocalFolder(name="picked", path=path, patterns=["docs/*.md", "*.txt"])]
+
+
+def test_adding_a_local_folder_keeps_the_others_and_the_comments(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, TWO_FOLDERS)
+
+    add_local_folder(path, "third", str(tmp_path), [])
+
+    assert path.read_text(encoding="utf-8").startswith(TWO_FOLDERS)
+    assert [folder.name for folder in load_config(path).local_folders] == ["first", "second", "third"]
+
+
+def test_a_local_folder_joins_an_inline_list(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, 'local_folders = [{name = "first", path = "~/first"}]\n')
+
+    add_local_folder(path, "second", str(tmp_path), [])
+
+    assert [folder.name for folder in load_config(path).local_folders] == ["first", "second"]
+
+
+def test_a_local_folder_is_added_to_a_file_with_no_final_newline(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, '[[local_folders]]\nname = "first"\npath = "~/first"')
+
+    add_local_folder(path, "second", str(tmp_path), [])
+
+    assert [folder.name for folder in load_config(path).local_folders] == ["first", "second"]
+
+
+def test_a_local_folder_keeps_a_typed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    (home / "notes").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    path = toml_file(tmp_path, PICKED)
+
+    add_local_folder(path, "notes", "~/notes", [])
+
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["local_folders"][0]["path"] == "~/notes"
+
+
+@pytest.mark.parametrize("existing", ["first", "FIRST"])
+def test_a_local_folder_name_cant_repeat_in_any_case(tmp_path: Path, existing: str) -> None:
+    path = toml_file(tmp_path, TWO_FOLDERS)
+
+    with pytest.raises(SelectionError, match="already a local folder"):
+        add_local_folder(path, existing, str(tmp_path), [])
+
+    assert path.read_text(encoding="utf-8") == TWO_FOLDERS
+
+
+@pytest.mark.parametrize("name", ["with space", "ends.", "a/b", "..", "<b>"])
+def test_a_bad_local_folder_name_is_refused(tmp_path: Path, name: str) -> None:
+    path = toml_file(tmp_path, PICKED)
+
+    with pytest.raises(SelectionError, match="can't name a folder"):
+        add_local_folder(path, name, str(tmp_path), [])
+
+    assert path.read_text(encoding="utf-8") == PICKED
+
+
+@pytest.mark.parametrize("name", ["a", "a.b-c_d", "1"])
+def test_a_name_the_form_accepts_is_one_the_file_accepts(tmp_path: Path, name: str) -> None:
+    path = toml_file(tmp_path, PICKED)
+
+    add_local_folder(path, name, str(tmp_path), [])
+
+    assert load_config(path).local_folders[0].name == name
+
+
+@pytest.mark.parametrize(("name", "location"), [("", "somewhere"), ("notes", "")])
+def test_a_local_folder_needs_a_name_and_a_path(tmp_path: Path, name: str, location: str) -> None:
+    with pytest.raises(SelectionError, match="name and a path"):
+        add_local_folder(toml_file(tmp_path, PICKED), name, location, [])
+
+
+def test_a_local_folder_path_must_be_absolute(tmp_path: Path) -> None:
+    with pytest.raises(SelectionError, match="absolute"):
+        add_local_folder(toml_file(tmp_path, PICKED), "notes", "relative/notes", [])
+
+
+def test_a_local_folder_path_must_exist(tmp_path: Path) -> None:
+    gone = tmp_path / "gone"
+
+    with pytest.raises(SelectionError, match="doesn't exist"):
+        add_local_folder(toml_file(tmp_path, PICKED), "notes", str(gone), [])
+
+
+def test_a_local_folder_pattern_cant_leave_the_folder(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, PICKED)
+
+    with pytest.raises(SelectionError, match="relative to the folder"):
+        add_local_folder(path, "notes", str(tmp_path), ["../*.md"])
+
+    assert path.read_text(encoding="utf-8") == PICKED
+
+
+def test_a_local_folder_cant_create_the_file_that_would_select_every_repo(tmp_path: Path) -> None:
+    path = tmp_path / "repolore.toml"
+
+    with pytest.raises(SelectionError, match="repos first"):
+        add_local_folder(path, "notes", str(tmp_path), [])
+
+    assert not path.exists()
+
+
+def test_a_local_folder_is_removed_and_the_rest_stays(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, TWO_FOLDERS)
+
+    remove_local_folder(path, "second")
+
+    text = path.read_text(encoding="utf-8")
+    assert [folder.name for folder in load_config(path).local_folders] == ["first"]
+    assert "# why these repos" in text
+    assert "# the old one" in text
+
+
+def test_removing_the_last_local_folder_leaves_a_valid_file(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, '# why\ninclude = ["me/alpha"]\n\n[[local_folders]]\nname = "only"\npath = "~/only"\n')
+
+    remove_local_folder(path, "only")
+
+    assert path.read_text(encoding="utf-8").strip() == '# why\ninclude = ["me/alpha"]'
+
+
+def test_a_local_folder_is_removed_from_an_inline_list(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, 'local_folders = [{name = "a", path = "~/a"}, {name = "b", path = "~/b"}]\n')
+
+    remove_local_folder(path, "a")
+
+    assert [folder.name for folder in load_config(path).local_folders] == ["b"]
+
+
+def test_removing_a_local_folder_that_isnt_there_is_refused(tmp_path: Path) -> None:
+    path = toml_file(tmp_path, TWO_FOLDERS)
+
+    with pytest.raises(SelectionError, match="no local folder named third"):
+        remove_local_folder(path, "third")
+
+    assert path.read_text(encoding="utf-8") == TWO_FOLDERS

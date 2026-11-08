@@ -409,11 +409,14 @@ def ui(
     browser: Annotated[bool, typer.Option(help="Open the page in the default browser.")] = True,
     db: IndexOption = DEFAULT_INDEX,
 ) -> None:
-    """Show repolore's status in a local web page, until Ctrl-C."""
-    # uvicorn, Starlette and Jinja load only for this command, not for every other command.
+    """Show repolore's status and set it up in a local web page, until Ctrl-C."""
+    _serve_page(ctx.obj, db, browser)
+
+
+def _serve_page(paths: AppPaths, db: str, browser: bool) -> None:
+    # uvicorn, Starlette and Jinja load only for the page, not for every other command.
     from repolore.ui.app import serve
 
-    paths: AppPaths = ctx.obj
     serve(paths, db, partial(_page_ready, browser=browser))
     typer.echo("Stopped.")
 
@@ -459,7 +462,7 @@ def setup(
     it finds and start the first refresh.
 
     Each question has a flag that answers it; --include, --exclude, --local-root and --local-pattern together answer the
-    repo picking.
+    repo picking. With no flags at all, it first offers the local web page instead of the questions.
     """
     paths: AppPaths = ctx.obj
     _print_version(paths)
@@ -469,6 +472,10 @@ def setup(
     typer.echo(str(check))
     if access is None:
         raise typer.Exit(1)
+    flags = (include, exclude, local_root, local_pattern, replace_config, register_clients, only_clients, first_refresh)
+    if _prefers_the_page(flags, db):
+        _serve_page(paths, db, browser=True)
+        return
     with _exit_on(SelectionError):
         roots = checked_roots(local_root or [])
         patterns = checked_patterns(local_pattern or [])
@@ -479,6 +486,12 @@ def setup(
     _setup_refresh(paths.data_dir, db, first_refresh)
     if not registered:
         raise typer.Exit(1)
+
+
+def _prefers_the_page(flags: tuple[object, ...], db: str) -> bool:
+    """Flags mean a script or a choice already made, and an SSH session has no browser, so it's offered, default no."""
+    no_flags = db == DEFAULT_INDEX and all(flag is None or flag == [] for flag in flags)
+    return no_flags and typer.confirm("Finish the setup on a local web page instead of here?", default=False)
 
 
 def _setup_config(config_file: Path, chosen: Config | None, replace: bool | None) -> None:

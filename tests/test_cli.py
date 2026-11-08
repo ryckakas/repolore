@@ -1345,6 +1345,90 @@ def test_setup_stops_when_the_token_doesnt_work(tmp_path: Path, monkeypatch: pyt
     assert run.refreshes == []
 
 
+PAGE_QUESTION = "local web page"
+
+
+def test_setup_with_no_flags_offers_the_page_and_runs_it_when_told(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ui_serve: list[tuple[Path, str]]
+) -> None:
+    monkeypatch.setattr(cli.webbrowser, "open", lambda _: True)
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert PAGE_QUESTION in result.output
+    assert "Stopped." in result.output
+    assert ui_serve == [(run.data_dir, "default")]
+    assert not run.config_file.exists()
+    assert run.registered == []
+    assert run.refreshes == []
+
+
+def test_setup_with_no_flags_keeps_its_questions_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ui_serve: list[tuple[Path, str]]
+) -> None:
+    run = setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup"], input="\n\n\n\n\n")
+
+    assert result.exit_code == 0, result.output
+    assert PAGE_QUESTION in result.output
+    assert ui_serve == []
+    assert run.config_file.exists()
+    assert run.registered == ["Claude Code"]
+
+
+def test_setup_doesnt_offer_the_page_when_the_token_doesnt_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup_run(tmp_path, monkeypatch, access=(Check("GitHub", False, "the token didn't work", "log in again"), None))
+
+    result = runner.invoke(app, ["setup"])
+
+    assert result.exit_code == 1
+    assert PAGE_QUESTION not in result.output
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--include", "me/*"],
+        ["--exclude", "me/old"],
+        ["--keep-config"],
+        ["--replace-config"],
+        ["--register"],
+        ["--no-register"],
+        ["--clients", "claude"],
+        ["--refresh"],
+        ["--no-refresh"],
+        ["--db", "other"],
+    ],
+)
+def test_setup_doesnt_offer_the_page_with_any_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ui_serve: list[tuple[Path, str]], flags: list[str]
+) -> None:
+    setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["setup", *flags], input="\n" * 8)
+
+    assert PAGE_QUESTION not in result.output
+    assert ui_serve == []
+
+
+def test_setup_doesnt_offer_the_page_with_the_local_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ui_serve: list[tuple[Path, str]]
+) -> None:
+    setup_run(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app, ["setup", "--local-root", str(tmp_path), "--local-pattern", "*.md", *ANSWERED], input="\n" * 4
+    )
+
+    assert PAGE_QUESTION not in result.output
+    assert ui_serve == []
+
+
 def test_setup_goes_on_with_a_token_missing_a_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     access = (Check("GitHub", False, "octocat; missing read:org", "`gh auth refresh`"), WORKING_TOKEN)
     run = setup_run(tmp_path, monkeypatch, access=access)

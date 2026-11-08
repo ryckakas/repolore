@@ -1,0 +1,26 @@
+{% if notice is defined %}{% include "_notice.html" %}{% endif %}
+{% if message is defined %}{% include "_saved.html" %}{% endif %}
+{% if folders %}
+<ul class="folders">
+  {% for folder in folders %}
+  <li>
+    <div><code>{{ folder.repo }}</code> <span class="muted">{{ folder.path }} · {{ folder.patterns | join(", ") }}</span></div>
+    <form method="post" action="/setup/folders/remove" data-into="#folders" data-waiting="Removing…">
+      <input type="hidden" name="name" value="{{ folder.name }}">
+      <button type="submit" aria-label="Remove {{ folder.repo }}">Remove</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">None yet.</p>
+{% endif %}
+<form method="post" action="/setup/folders" data-into="#folders" data-waiting="Saving…">
+  <label for="folder-name">Name, searched as local/name</label>
+  <input type="text" id="folder-name" name="name" spellcheck="false" required value="{{ draft.name }}">
+  <label for="folder-path">A folder or one file, absolute or starting with ~</label>
+  <input type="text" id="folder-path" name="path" spellcheck="false" required value="{{ draft.path }}">
+  <label for="folder-patterns">Documents inside it, one glob per line; empty means every markdown file</label>
+  <textarea id="folder-patterns" name="patterns" rows="2" spellcheck="false">{{ draft.patterns }}</textarea>
+  <button type="submit">Add folder</button>
+</form>

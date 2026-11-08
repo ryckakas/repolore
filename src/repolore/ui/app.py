@@ -21,6 +21,7 @@ from repolore.doctor import Check, diagnose, index_check, refresh_check, server_
 from repolore.paths import AppPaths
 from repolore.refresh import refresh_status, start_refresh
 from repolore.server_state import HOST, ServerFiles
+from repolore.ui.client_pages import ClientPages
 from repolore.ui.rendering import render
 from repolore.ui.setup_pages import SetupPages
 
@@ -122,6 +123,7 @@ class Pages:
 def create_app(paths: AppPaths, db: str, token: str) -> Starlette:
     pages = Pages(paths, db)
     setup = SetupPages(paths, db)
+    clients = ClientPages(db)
     return Starlette(
         routes=[
             Route("/", pages.status),
@@ -132,6 +134,10 @@ def create_app(paths: AppPaths, db: str, token: str) -> Starlette:
             Route("/setup/repos", setup.repos),
             Route("/setup/repos", setup.save_repos, methods=["POST"]),
             Route("/setup/local", setup.save_local, methods=["POST"]),
+            Route("/setup/folders", setup.add_folder, methods=["POST"]),
+            Route("/setup/folders/remove", setup.remove_folder, methods=["POST"]),
+            Route("/setup/clients", clients.listing),
+            Route("/setup/clients", clients.register, methods=["POST"]),
             Mount("/static", StaticFiles(directory=HERE / "static")),
         ],
         middleware=[

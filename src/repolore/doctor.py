@@ -201,7 +201,10 @@ def _folder_check(folder: LocalFolder, limit: int) -> Check:
     files = folder_files(folder, limit)
     if files is None:
         return Check(folder.repo, False, f"not found: {folder.path}", "fix its path in repolore.toml")
-    count = len(files.matches())
+    try:
+        count = len(files.matches())
+    except OSError as error:
+        return Check(folder.repo, False, f"can't search {files.root}: {error}", "check its path and patterns")
     if count > limit:
         return Check(folder.repo, False, f"more than {limit} files in {files.root}", LIMIT_FIX)
     if count == 0:
@@ -305,7 +308,8 @@ def server_check(files: ServerFiles) -> Check:
     return Check(name, True, f"pid {found.pid} at {found.url}, repolore {found.version}{replaced}; {sessions}")
 
 
-def registration_check(client: McpClient) -> Check | None:
+def registration_check(client: McpClient, *, connection: bool = True) -> Check | None:
+    """What a client that's here has registered; connection=False skips asking it, which can start the shared server."""
     if not client.present():
         return None
     try:
@@ -316,7 +320,7 @@ def registration_check(client: McpClient) -> Check | None:
         return Check(client.name, True, "repolore isn't registered", client.register, warning=True)
     if len(found) > 1:
         return _duplicates_check(client, found)
-    return _entry_check(client, found[0])
+    return _entry_check(client, found[0], connection)
 
 
 def _duplicates_check(client: McpClient, found: list[Entry]) -> Check:
@@ -325,12 +329,12 @@ def _duplicates_check(client: McpClient, found: list[Entry]) -> Check:
     return Check(client.name, False, f"repolore is registered {len(found)} times: {listed}", f"keep one: {removals}")
 
 
-def _entry_check(client: McpClient, entry: Entry) -> Check:
+def _entry_check(client: McpClient, entry: Entry, connection: bool) -> Check:
     registered = f"repolore is registered{entry.alias}"
     if entry.command_is_gone:
         detail = f"{registered}, but {entry.command[0]} no longer exists"
         return Check(client.name, False, detail, f"{entry.remove}, then run `repolore setup`")
-    if client.health is None:
+    if client.health is None or not connection:
         return Check(client.name, True, f"{registered}, connection not checked")
     try:
         status = client.health(entry.name)
