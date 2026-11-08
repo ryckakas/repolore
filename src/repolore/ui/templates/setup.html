@@ -19,5 +19,14 @@
   </form>
   <div id="local-result" class="result" aria-live="polite"></div>
 </section>
+<section>
+  <h2>Local folders</h2>
+  <p class="muted">Markdown that belongs to no repo, such as notes. Always indexed, whatever the repos above say.</p>
+  <div id="folders">{% include "_folders.html" %}</div>
+</section>
+<section>
+  <h2>MCP clients</h2>
+  <div id="clients" data-load="/setup/clients" aria-live="polite">Looking for MCP clients on this machine…</div>
+</section>
 {% endif %}
 {% endblock %}

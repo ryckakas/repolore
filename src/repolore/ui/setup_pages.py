@@ -14,7 +14,16 @@ from repolore.discovery import discover
 from repolore.doctor import CONFIG_ERRORS, Check, github_access, local_documents_checks
 from repolore.paths import AppPaths
 from repolore.refresh import refresh_status
-from repolore.setup import PLANS_PATTERN, RepoChange, RepoTicks, SelectionError, save_local_settings, save_ticks
+from repolore.setup import (
+    PLANS_PATTERN,
+    RepoChange,
+    RepoTicks,
+    SelectionError,
+    add_local_folder,
+    remove_local_folder,
+    save_local_settings,
+    save_ticks,
+)
 from repolore.sources.github import RATE_LIMIT_FLOOR, GitHubClient, GitHubError, resolve_token
 from repolore.ui.rendering import render
 
@@ -29,6 +38,15 @@ class RepoRow:
     name: str
     scope: str
     ticked: bool
+
+
+@dataclass(frozen=True)
+class FolderDraft:
+    """What the add-a-folder form holds, so a refused save doesn't lose what was typed."""
+
+    name: str = ""
+    path: str = ""
+    patterns: str = ""
 
 
 class SetupPages:
@@ -48,6 +66,8 @@ class SetupPages:
             roots="\n".join(str(root) for root in config.local_roots),
             patterns="\n".join(config.local_patterns),
             example_pattern=PLANS_PATTERN,
+            folders=config.local_folders,
+            draft=FolderDraft(),
         )
 
     def repos(self, request: Request) -> Response:
@@ -79,6 +99,15 @@ class SetupPages:
             self._save_local, request, _lines(form.get("roots")), _lines(form.get("patterns"))
         )
 
+    async def add_folder(self, request: Request) -> Response:
+        form = await request.form()
+        draft = FolderDraft(_text(form, "name"), _text(form, "path"), _text(form, "patterns"))
+        return await run_in_threadpool(self._add_folder, request, draft)
+
+    async def remove_folder(self, request: Request) -> Response:
+        form = await request.form()
+        return await run_in_threadpool(self._remove_folder, request, _text(form, "name"))
+
     def _repo_form(self, request: Request, github: Check, config: Config) -> Response:
         with closing(GitHubClient.connect(resolve_token())) as client:
             discovery = discover(client, config)
@@ -107,6 +136,37 @@ class SetupPages:
         checks = list(local_documents_checks(self._paths.config_file))
         return self._saved(request, "Saved.", saved=True, checks=checks)
 
+    def _add_folder(self, request: Request, draft: FolderDraft) -> Response:
+        try:
+            add_local_folder(self._paths.config_file, draft.name, draft.path, _lines(draft.patterns))
+        except SAVE_ERRORS as error:
+            return self._folders(request, 400, draft, notice=str(error))
+        checks = list(local_documents_checks(self._paths.config_file))
+        return self._changed_folders(request, f"Added {FOLDER_OWNER}/{draft.name}.", checks)
+
+    def _remove_folder(self, request: Request, name: str) -> Response:
+        try:
+            remove_local_folder(self._paths.config_file, name)
+        except SAVE_ERRORS as error:
+            return self._folders(request, 400, notice=str(error))
+        message = f"Removed {FOLDER_OWNER}/{name}. It leaves the index and its cached data at the next refresh."
+        return self._changed_folders(request, message, [])
+
+    def _changed_folders(self, request: Request, message: str, checks: list[Check]) -> Response:
+        running = refresh_status(self._paths.data_dir).running
+        return self._folders(request, message=message, saved=True, checks=checks, running=running)
+
+    def _folders(
+        self, request: Request, status_code: int = 200, draft: FolderDraft | None = None, **context: Any
+    ) -> Response:
+        try:
+            folders = load_config(self._paths.config_file).local_folders
+        except (OSError, *CONFIG_ERRORS):
+            folders = []
+        return self._render(
+            request, "_folders.html", status_code, folders=folders, draft=draft or FolderDraft(), **context
+        )
+
     def _saved(self, request: Request, message: str, *, saved: bool, checks: list[Check] | None = None) -> Response:
         running = refresh_status(self._paths.data_dir).running
         return self._render(request, "_saved.html", message=message, saved=saved, checks=checks, running=running)
@@ -117,6 +177,11 @@ class SetupPages:
 
 def _texts(form: FormData, name: str) -> list[str]:
     return [value for value in form.getlist(name) if isinstance(value, str)]
+
+
+def _text(form: FormData, name: str) -> str:
+    value = form.get(name)
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _lines(value: object) -> list[str]:

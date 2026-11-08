@@ -7,6 +7,7 @@ from typing import Annotated, Self
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 FOLDER_OWNER = "local"
+FOLDER_NAME = r"^[A-Za-z0-9._-]*[A-Za-z0-9_-]$"
 
 
 def relative_pattern(pattern: str) -> str:
@@ -36,7 +37,7 @@ def absolute_path(path: Path) -> Path:
 class LocalFolder(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]*[A-Za-z0-9_-]$")]
+    name: Annotated[str, StringConstraints(pattern=FOLDER_NAME)]
     path: Annotated[Path, AfterValidator(absolute_path)]
     patterns: Annotated[list[LocalPattern], Field(min_length=1)] = ["**/*.md"]
 

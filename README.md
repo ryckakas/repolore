@@ -70,6 +70,8 @@ background. It finds the repos you own or can read as a collaborator or organiza
 issues in other people's repos. Replacing `repolore.toml` with a smaller pick removes the other repos from the index
 at the next refresh.
 
+With no flags it first offers `repolore ui`, a local web page with the same choices, instead of the questions.
+
 Every question has a flag, which `repolore setup --help` lists, so it can run without asking:
 `repolore setup --include "you/*" --register --refresh`, plus `--replace-config` when `repolore.toml` exists, and
 `--clients claude,codex` to pick the clients. The install scripts pass their arguments on:
@@ -163,9 +165,13 @@ repolore search "why did we drop the retry middleware?"
 repolore search "rate limit handling" --repo you/some-repo --kind pr -k 10
 repolore refresh          # fetch what changed and rebuild the index with its recorded settings
 repolore doctor           # check every part of the setup, with the fix for each failure
-repolore ui               # a local web page for the status, doctor's checks, the repos and local documents, until Ctrl-C
+repolore ui               # a local web page for the status, doctor's checks, the repos, local documents and MCP clients, until Ctrl-C
 repolore server status    # the shared MCP server; `repolore server stop` stops it
 ```
+
+On a Linux machine shared with other accounts, run `repolore ui --no-browser` and paste the printed address into a
+browser yourself: opening a browser puts that address, which works until Ctrl-C, on a command line other accounts can
+read.
 
 Or ask your MCP client in a new session. It gets `search`, `read`, `list_repos` and `refresh` tools and can answer
 questions about your history with links to the sources. `search` cuts each passage at 1,500 characters, and `read`

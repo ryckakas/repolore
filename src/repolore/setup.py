@@ -2,19 +2,22 @@ import json
 import os
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import tomlkit
 from pydantic import ValidationError
+from tomlkit.toml_document import TOMLDocument
 
-from repolore.config import Config, absolute_path, load_config, relative_pattern
+from repolore.config import FOLDER_NAME, Config, absolute_path, load_config, relative_pattern
 from repolore.config_files import replace_file
 
 ALL = "all"
 PLANS_PATTERN = ".plans/**/*.md"
 NUMBERS = re.compile(r"(\d+)(?:-(\d+))?")
+FOLDERS_KEY = "local_folders"
 
 
 class SelectionError(ValueError):
@@ -146,27 +149,87 @@ def save_local_settings(path: Path, roots: list[str], patterns: list[str]) -> No
     except ValueError as error:
         raise SelectionError(str(error)) from error
     valid_patterns = checked_patterns(patterns)
+    _require_repos_saved(path)
+    update_config(path, {"local_roots": [str(root) for root in checked], "local_patterns": valid_patterns})
+
+
+def add_local_folder(path: Path, name: str, location: str, patterns: list[str]) -> None:
+    """Add a [[local_folders]] entry typed on the setup page, keeping the path as typed so a ~ stays one."""
+    config = load_config(path)
+    _check_new_folder(config, name, location)
+    entry: dict[str, Any] = {"name": name, "path": location}
+    if patterns:
+        entry["patterns"] = checked_patterns(patterns)
+    _require_repos_saved(path)
+    _edit_config(path, lambda document: _append_folder(document, entry))
+
+
+def remove_local_folder(path: Path, name: str) -> None:
+    if name not in [folder.name for folder in load_config(path).local_folders]:
+        raise SelectionError(f"There's no local folder named {name}.")
+    _edit_config(path, lambda document: _delete_folder(document, name))
+
+
+def _check_new_folder(config: Config, name: str, location: str) -> None:
+    if not name or not location:
+        raise SelectionError("Give the folder a name and a path.")
+    if not re.fullmatch(FOLDER_NAME, name):
+        raise SelectionError(f"{name} can't name a folder: use letters, digits, ., _ and -, and don't end with a dot.")
+    if name.lower() in {folder.name.lower() for folder in config.local_folders}:
+        raise SelectionError(f"There's already a local folder named {name}.")
+    try:
+        absolute = absolute_path(Path(location))
+    except ValueError as error:
+        raise SelectionError(str(error)) from error
+    if not absolute.expanduser().exists():
+        raise SelectionError(f"{location} doesn't exist.")
+
+
+def _require_repos_saved(path: Path) -> None:
     # A file with no include selects every repo, so only saving the repos may create it.
     if not path.exists():
         raise SelectionError("Save your repos first, then the local documents.")
-    update_config(path, {"local_roots": [str(root) for root in checked], "local_patterns": valid_patterns})
+
+
+def _append_folder(document: TOMLDocument, entry: dict[str, Any]) -> None:
+    if FOLDERS_KEY not in document:
+        document[FOLDERS_KEY] = tomlkit.aot()
+    folders: Any = document[FOLDERS_KEY]
+    folders.append(entry)
+
+
+def _delete_folder(document: TOMLDocument, name: str) -> None:
+    folders: Any = document[FOLDERS_KEY]
+    del folders[[folder["name"] for folder in folders].index(name)]
+    if not folders:
+        del document[FOLDERS_KEY]
 
 
 def update_config(path: Path, keys: dict[str, list[str]]) -> None:
     """Change only these keys, keeping the file's comments and its other keys; an empty list removes a key."""
+
+    def change(document: TOMLDocument) -> None:
+        for key, value in keys.items():
+            # Assigning an equal value would still rewrite the array and lose the comments inside it.
+            if value == document.get(key, []):
+                continue
+            if value:
+                document[key] = value
+            else:
+                document.pop(key, None)
+
+    _edit_config(path, change)
+
+
+def _edit_config(path: Path, change: Callable[[TOMLDocument], None]) -> None:
     target = path.resolve()
     existed = target.exists()
     if existed and not os.access(target, os.W_OK):
         raise PermissionError(f"{target} is read-only")
-    document = tomlkit.parse(target.read_text(encoding="utf-8")) if existed else tomlkit.document()
-    for key, value in keys.items():
-        # Assigning an equal value would still rewrite the array and lose the comments inside it.
-        if value == document.get(key, []):
-            continue
-        if value:
-            document[key] = value
-        else:
-            document.pop(key, None)
+    text = target.read_text(encoding="utf-8") if existed else ""
+    # tomlkit would join a new table onto a last line with no newline, which doesn't parse.
+    document = tomlkit.parse(text if text.endswith("\n") or not text else f"{text}\n")
+    change(document)
     text = tomlkit.dumps(document)
     Config.model_validate(tomllib.loads(text))
     replace_file(target, text.encode("utf-8"), existed)

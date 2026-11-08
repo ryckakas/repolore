@@ -1,0 +1,15 @@
+{% if notice is defined %}{% include "_notice.html" %}{% endif %}
+{% if message is defined %}<p>{{ message }}</p>{% endif %}
+{% if rows %}
+<ul class="checks">
+  {% for row in rows %}{% with check = row.check %}{% include "_check.html" %}{% endwith %}{% endfor %}
+</ul>
+{% for row in rows if row.can_register %}
+<form method="post" action="/setup/clients" data-into="#clients" data-waiting="Registering…">
+  <input type="hidden" name="client" value="{{ row.key }}">
+  <button type="submit">Register with {{ row.check.name }}</button>
+</form>
+{% endfor %}
+{% else %}
+<p class="muted">No MCP client was found on this machine.</p>
+{% endif %}

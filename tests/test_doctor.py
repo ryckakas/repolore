@@ -760,6 +760,22 @@ def test_a_missing_folder_fails_without_logging_it_again(tmp_path: Path, caplog:
     assert "doesn't exist" not in caplog.text
 
 
+def test_a_folder_that_cant_be_walked_fails_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "notes").mkdir()
+
+    def matches(_: object) -> list[str]:
+        raise FileNotFoundError("the path is too long")
+
+    monkeypatch.setattr(doctor.LocalFiles, "matches", matches)
+    check = local_checks(tmp_path, Config(local_folders=[LocalFolder(name="notes", path=tmp_path / "notes")]))[0]
+
+    assert not check.ok
+    assert "can't search" in check.detail
+    assert "the path is too long" in check.detail
+
+
 def test_a_folder_over_the_limit_fails(tmp_path: Path) -> None:
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "a.md").write_text("# A", encoding="utf-8")

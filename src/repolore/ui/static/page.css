@@ -146,6 +146,7 @@ label {
   display: block;
 }
 
+input[type="text"],
 textarea {
   display: block;
   width: 100%;
@@ -165,6 +166,26 @@ textarea {
   overflow-y: auto;
   list-style: none;
   overflow-wrap: anywhere;
+}
+
+.folders {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.folders li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+}
+
+.folders form {
+  flex: none;
+  margin: 0;
 }
 
 form:has([name="every"]:checked) .repos {
