@@ -152,7 +152,7 @@ def test_written_config_reads_back_the_same(tmp_path: Path) -> None:
 
 FOLDERS = [
     LocalFolder(name="notes", path=Path("~/notes")),
-    LocalFolder(name="odd", path=Path(str(PureWindowsPath(r"C:\\Users\\me\\od\"d"))), patterns=["a/*.md", "**/*.md"]),
+    LocalFolder(name="odd", path=Path('~/od"d'), patterns=["a/*.md", "**/*.md"]),
 ]
 
 
