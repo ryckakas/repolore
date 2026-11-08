@@ -195,7 +195,7 @@ a terminal uses your own environment, and `repolore server stop` lets the next c
 
 Running the install script again, or `uv tool upgrade repolore-mcp`, updates repolore and keeps its extras. On Windows,
 close the sessions using repolore first (in Claude Code you can disable it in `/mcp` instead), since running programs
-keep their files locked; after a manual upgrade, run `repolore server stop` too. Elsewhere, a session opened before the
+keep their files locked; before a manual upgrade, run `repolore server stop` too. Elsewhere, a session opened before the
 upgrade says so on its next search; reconnect repolore in your client (`/mcp` in Claude Code).
 
 The index and the raw GitHub responses live in the data directory that `repolore version` prints; they contain your
@@ -227,7 +227,8 @@ these it finds; `--clients` picks some by key:
 | OpenCode | `opencode` | `opencode.json` or `opencode.jsonc` |
 | Devin CLI | `devin` | `devin mcp add` at user scope |
 
-Claude Code and Codex have been run end to end. The others follow each client's documentation, so
+Claude Code and Codex have been run end to end. Registering has also been checked on real installs of Claude Desktop,
+Cursor and VS Code. The rest follow each client's documentation, so
 [open an issue](https://github.com/ryckakas/repolore/issues) if one doesn't work.
 
 A client that already has repolore, under any name, is left alone. Adding to another app's settings file leaves the
@@ -293,11 +294,11 @@ the server.
 <details>
 <summary><b>Claude Desktop, Cursor, VS Code, Gemini CLI, Zed, OpenCode and Devin CLI</b></summary>
 
-- **Claude Desktop:** quit it fully and restart it after registering. It gets no token, because it has no way to
-  reference a variable. On Windows, a Store install reads its config from its own folder under `Packages`, and `setup`
-  writes there.
+- **Claude Desktop:** quit it fully and restart it after registering. It gets no token, because it has no documented
+  way to reference a variable. On Windows, a Store install is reported to read its config from its own folder under
+  `Packages`, and `setup` writes there.
 - **Claude Desktop and the Cursor CLI** are reported to cut a tool call off at about 60 seconds, with no setting to
-  change it. A first search that waits for the model usually fits, in about half a minute.
+  change it. A first search that waits for the model takes about half a minute, so it should fit.
 - **Cursor and Devin CLI:** variables that are set when `setup` runs go in as `${env:NAME}`. An app started from a dock
   may not have them; a token it can't expand falls back to `gh`.
 - **VS Code:** the entry goes in the default profile's `mcp.json`.
