@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from repolore.config import Config
+from repolore.config import Config, LocalFolder
 from repolore.ingest import cached_documents
 from repolore.sources import local_docs
 from repolore.sources.local_docs import (
@@ -13,6 +13,7 @@ from repolore.sources.local_docs import (
     LocalFiles,
     TooManyFilesError,
     find_checkouts,
+    find_folders,
     github_repo,
     load_local_files,
     read_local_files,
@@ -347,3 +348,106 @@ def test_local_files_round_trip_through_the_cache(tmp_path: Path) -> None:
 
     assert load_local_files(tmp_path / "octo" / "repo") == cached
     assert load_local_files(tmp_path / "octo" / "other") == []
+
+
+def folders(*entries: LocalFolder, limit: int = 100) -> dict[str, LocalFiles]:
+    return find_folders(Config(local_folders=list(entries), max_local_files=limit))
+
+
+def test_a_folder_entry_matches_markdown_anywhere_by_default(tmp_path: Path) -> None:
+    write(tmp_path / "notes" / "top.md")
+    write(tmp_path / "notes" / "deep" / "er.md")
+    write(tmp_path / "notes" / "skip.pdf")
+
+    found = folders(LocalFolder(name="notes", path=tmp_path / "notes"))
+
+    assert list(found) == ["local/notes"]
+    assert names(found["local/notes"].root, *found["local/notes"].patterns) == ["deep/er.md", "top.md"]
+
+
+def test_a_folder_entry_uses_its_own_patterns_and_the_configured_limit(tmp_path: Path) -> None:
+    write(tmp_path / "adr" / "one.md")
+    write(tmp_path / "other.md")
+
+    found = folders(LocalFolder(name="a", path=tmp_path, patterns=["adr/*.md"]), limit=7)
+
+    assert found["local/a"] == LocalFiles(tmp_path.resolve(), ("adr/*.md",), 7)
+    assert [file.path for file in read_local_files(found["local/a"])] == ["adr/one.md"]
+
+
+def test_a_folder_entry_can_be_a_single_file_and_ignores_patterns(tmp_path: Path) -> None:
+    file = write(tmp_path / "design.md", "# Design")
+    write(tmp_path / "other.md")
+
+    found = folders(LocalFolder(name="design", path=file, patterns=["nothing/*.md"]))
+
+    read = read_local_files(found["local/design"])
+    assert [(item.path, item.text) for item in read] == [("design.md", "# Design")]
+
+
+def test_a_single_file_with_glob_characters_in_its_name_is_found(tmp_path: Path) -> None:
+    file = write(tmp_path / "a[b].md")
+    write(tmp_path / "ab.md")
+
+    found = folders(LocalFolder(name="odd", path=file))
+
+    assert [item.path for item in read_local_files(found["local/odd"])] == ["a[b].md"]
+
+
+def test_a_single_file_that_isnt_markdown_matches_nothing(tmp_path: Path) -> None:
+    found = folders(LocalFolder(name="data", path=write(tmp_path / "data.txt")))
+
+    assert read_local_files(found["local/data"]) == []
+
+
+def test_an_empty_folder_stays_a_source(tmp_path: Path) -> None:
+    assert read_local_files(folders(LocalFolder(name="empty", path=tmp_path))["local/empty"]) == []
+
+
+def test_no_folder_entries_means_no_folders() -> None:
+    assert find_folders(Config()) == {}
+
+
+def test_a_missing_path_is_logged_and_dropped(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    present = LocalFolder(name="here", path=tmp_path)
+
+    with caplog.at_level(logging.WARNING):
+        found = folders(LocalFolder(name="gone", path=tmp_path / "gone"), present)
+
+    assert list(found) == ["local/here"]
+    assert "doesn't exist" in caplog.text
+
+
+def test_a_folder_under_the_home_directory_is_expanded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    write(tmp_path / "notes" / "a.md")
+
+    found = folders(LocalFolder(name="notes", path=Path("~/notes")))
+
+    assert found["local/notes"].root == (tmp_path / "notes").resolve()
+
+
+def test_a_single_file_named_through_a_link_is_read(tmp_path: Path) -> None:
+    target = write(tmp_path / "elsewhere" / "real.md", "# Real")
+    link = tmp_path / "notes" / "named.md"
+    link.parent.mkdir()
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("creating a file symlink needs a privilege on this Windows account")
+
+    found = folders(LocalFolder(name="linked", path=link))
+
+    assert [item.text for item in read_local_files(found["local/linked"])] == ["# Real"]
+
+
+def test_a_folder_path_that_is_a_link_is_followed_but_links_inside_are_not(tmp_path: Path) -> None:
+    write(tmp_path / "real" / "a.md")
+    write(tmp_path / "outside" / "secret.md")
+    link_folder(tmp_path / "named", tmp_path / "real")
+    link_folder(tmp_path / "real" / "inner", tmp_path / "outside")
+
+    found = folders(LocalFolder(name="linked", path=tmp_path / "named", patterns=["*.md", "*/*.md"]))
+
+    assert [item.path for item in read_local_files(found["local/linked"])] == ["a.md"]

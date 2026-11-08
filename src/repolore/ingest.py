@@ -2,6 +2,7 @@ import logging
 import shutil
 from pathlib import Path
 
+from repolore.config import FOLDER_OWNER
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import Document, documents_from, local_documents
 from repolore.progress import Phase, Progress, Report, ignore
@@ -32,7 +33,8 @@ def ingest(
 def cached_documents(raw_dir: Path, include_bot_reviews: bool = False) -> list[Document]:
     documents: list[Document] = []
     local: dict[str, Document] = {}
-    for directory in _repo_dirs(raw_dir):
+    # Local folders come last, so a file a checkout also reaches stays under its real repo.
+    for directory in sorted(_repo_dirs(raw_dir), key=lambda path: path.parent.name == FOLDER_OWNER):
         raw = RawRepo.load(directory) if RawRepo.is_cached(directory) else None
         if raw:
             documents += documents_from(raw, include_bot_reviews)

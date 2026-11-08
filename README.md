@@ -133,6 +133,11 @@ same way. See [MCP clients](https://github.com/ryckakas/repolore#mcp-clients) fo
    local_roots = ["~/projects"]                # where your checkouts are, up to two levels down
    local_patterns = [".plans/**/*.md"]         # markdown to index inside each checkout; nothing local when unset
    checkout_depth = 2                          # optional: how many levels under a root to look
+
+   [[local_folders]]                           # markdown that belongs to no repo; repeat for more
+   name = "notes"                              # search it as --repo local/notes
+   path = "~/notes"                            # absolute or ~, a folder or one file
+   patterns = ["**/*.md"]                      # optional, for a folder
    ```
 
 2. Fetch and index:

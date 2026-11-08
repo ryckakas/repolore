@@ -1,3 +1,4 @@
+import glob
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from repolore.config import Config
+from repolore.config import Config, LocalFolder
 from repolore.sources.github import SKIPPED_DIRS
 
 LOCAL_FILE = "local.json"
@@ -79,6 +80,23 @@ def find_checkouts(config: Config) -> dict[str, LocalFiles]:
                 if kept != files:
                     log.warning("%s is checked out in %s and %s; using the first", repo, kept.root, checkout)
     return found
+
+
+def find_folders(config: Config) -> dict[str, LocalFiles]:
+    """The files of each local_folders entry whose path exists, keyed by the repo name it goes by."""
+    found = {folder.repo: _folder_files(folder, config.max_local_files) for folder in config.local_folders}
+    return {repo: files for repo, files in found.items() if files}
+
+
+def _folder_files(folder: LocalFolder, limit: int) -> LocalFiles | None:
+    # Resolved first, so a path the user named can itself be a link; links further in still can't leave it.
+    path = folder.path.expanduser().resolve()
+    if os.path.isfile(path):
+        return LocalFiles(path.parent, (glob.escape(path.name),), limit)
+    if os.path.isdir(path):
+        return LocalFiles(path, tuple(folder.patterns), limit)
+    log.warning("local folder %s doesn't exist", path)
+    return None
 
 
 def _checkouts_under(folder: Path, depth: int) -> Iterator[Path]:

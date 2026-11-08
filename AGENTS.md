@@ -117,7 +117,7 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   holding the raw API cache and the DB files, and `--data-dir` overrides it. **The repo never
   contains corpus data.** It contains private code, so it stays out of git.
 - `config.py` loads `repolore.toml`: optional `include` / `exclude` globs over `owner/name`, and `local_roots`,
-  `checkout_depth`, `local_patterns` and `max_local_files` for local documents. Without a file, every discovered
+  `checkout_depth`, `local_patterns`, `[[local_folders]]` and `max_local_files` for local documents. Without a file, every discovered
   repo is in and nothing local is.
 - `discovery.py` decides what to ingest. Repos the viewer owns or reads as a collaborator or org member (forks
   skipped) are fetched whole. Other people's repos found by an `involves:<login>` search are fetched only for the
@@ -125,7 +125,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   on. The search leaves out each org whose every visible repo is in the viewer's repo list (forks included), so its
   PRs don't fill the search's 1,000 results; forks in those orgs get a search of their own. Private memberships need
   `read:org`; orgs that can't be read stay in the search. Checkouts under `local_roots` that `local_patterns` match in
-  add those files, matched to a repo by the `origin` remote, and stay in as local-only when the repo itself is gone.
+  add those files, matched to a repo by the `origin` remote, and stay in as local-only when the repo itself is gone. Each `[[local_folders]]` entry is a source named
+  `local/<name>`, kept whatever `include` and `exclude` say, since naming it was the choice; one whose path is gone
+  drops out with a warning.
 - `sources/` fetches GitHub data with a sync `httpx` client: GraphQL for PRs, issues, commits, discovery and
   contributions (`github.graphql`), REST for the markdown tree and blobs. `models.py` types the responses. The
   client waits for the rate limit to reset when fewer than 100 points are left, and retries a rate-limited request.
@@ -144,7 +146,8 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
 - `documents.py` normalizes into `Document`s. Bots are filtered by GraphQL `author.__typename`,
   not by a login list. Deleted accounts become `ghost`. Review threads a bot started are dropped unless the index
   is built with `--bot-reviews`. Local files are private `local` documents with `file://` URLs. `cached_documents` leaves a local file to the
-  repo's GitHub copy when that has the same path, and keeps one document per URL, since chunk ids are built from it. A
+  repo's GitHub copy when that has the same path, and keeps one document per URL, since chunk ids are built from it, reading `local/*` last so a file a checkout
+  also reaches stays under its repo. A
   commit is indexed only
   when no PR has it: its oid is neither a PR's merge commit nor one of its first 100 commits, whatever the PR's state.
   The history query doesn't ask GitHub per commit, which made its pages up to 3x slower; commits cached while it did
@@ -259,7 +262,7 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   Claude Code, which starts the server; other clients can't be checked. More than one fails, naming each and how to
   remove it. A client without repolore warns.
 - `setup.py` holds what `repolore setup` needs besides prompts: parsing the repo pick (numbers, ranges, globs) and the
-  local roots, and writing `repolore.toml`. The command reuses doctor's GitHub check and stops only when the token
+  local roots, and writing `repolore.toml`, which keeps the settings setup can't ask about when it replaces a file. The command reuses doctor's GitHub check and stops only when the token
   doesn't work. `clients.py` has one table of the clients it knows, `--clients` picking some by key: Claude Code and
   Devin CLI through their own `mcp add`, Codex by appending to `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp
   add` can't set the timeouts, and Gemini CLI, Claude Desktop, Cursor, VS Code, Zed and OpenCode through

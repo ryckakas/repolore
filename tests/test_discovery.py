@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from repolore import discovery as discovery_module
-from repolore.config import Config
+from repolore.config import Config, LocalFolder
 from repolore.discovery import RepoSource, Scope, discover
 from repolore.sources.github import GitHubClient, GitHubError, ViewerOrg, ViewerRepo
 from repolore.sources.local_docs import LocalFiles
@@ -136,3 +136,30 @@ def test_unreadable_organizations_keep_every_org_in_the_search(
     assert [source.name for source in result.included] == ["Octo-Org/service", "other/project"]
     assert "can't read your organizations" in caplog.text
     assert "SAML enforcement" in caplog.text
+
+
+def test_a_local_folder_is_included_whatever_the_globs_say(found: Path) -> None:
+    (found / "notes").mkdir()
+    folder = LocalFolder(name="notes", path=found / "notes")
+
+    result = discover(CLIENT, Config(include=["octocat/*"], exclude=["local/*"], local_folders=[folder]))
+
+    expected = RepoSource("local/notes", Scope.LOCAL, LocalFiles((found / "notes").resolve(), ("**/*.md",), 2000))
+    assert expected in result.included
+
+
+def test_a_missing_local_folder_is_not_a_source(found: Path) -> None:
+    folder = LocalFolder(name="notes", path=found / "gone")
+
+    result = discover(CLIENT, Config(local_folders=[folder]))
+
+    assert "local/notes" not in [source.name for source in result.included]
+
+
+def test_a_local_folder_replaces_a_github_repo_of_the_same_name(found: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(discovery_module, "involved_repositories", lambda *_: ["Local/Notes"])
+    (found / "notes").mkdir()
+
+    result = discover(CLIENT, Config(local_folders=[LocalFolder(name="notes", path=found / "notes")]))
+
+    assert [source.scope for source in result.included if source.name.lower() == "local/notes"] == [Scope.LOCAL]

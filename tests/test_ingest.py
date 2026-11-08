@@ -216,3 +216,25 @@ def test_progress_with_nothing_discovered_has_nothing_to_fetch(tmp_path: Path) -
     ingest(discovery(), tmp_path, CLIENT, report=reports.append)
 
     assert reports == [Progress(phase=Phase.INGEST, done=0, total=0)]
+
+
+def test_a_removed_local_folder_is_purged_from_the_cache(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    (folder / "a.md").write_text("# A", encoding="utf-8")
+    source = RepoSource("local/notes", Scope.LOCAL, LocalFiles(folder, ("*.md",), 10))
+
+    kept = ingest(discovery(source), raw_dir, CLIENT)
+    removed = ingest(discovery(), raw_dir, CLIENT)
+
+    assert [(document.repo, document.kind) for document in kept] == [("local/notes", DocumentKind.LOCAL)]
+    assert removed == []
+    assert not (raw_dir / "local").exists()
+
+
+def test_a_file_in_a_checkout_and_a_folder_stays_under_its_repo(tmp_path: Path) -> None:
+    save_local_files(tmp_path / "local" / "notes", [local_file("x.md", "file:///same")])
+    save_local_files(tmp_path / "octo" / "repo", [local_file("x.md", "file:///same")])
+
+    assert [document.repo for document in cached_documents(tmp_path)] == ["octo/repo"]

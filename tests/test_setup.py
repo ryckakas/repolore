@@ -2,7 +2,7 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 
-from repolore.config import Config, load_config
+from repolore.config import Config, LocalFolder, load_config
 from repolore.setup import (
     PLANS_PATTERN,
     SelectionError,
@@ -13,6 +13,7 @@ from repolore.setup import (
     parse_roots,
     parse_selection,
     require_roots_with_patterns,
+    with_unasked_settings,
     write_config,
 )
 
@@ -147,3 +148,57 @@ def test_written_config_reads_back_the_same(tmp_path: Path) -> None:
 
     assert path.read_text(encoding="utf-8") == text
     assert load_config(path) == config
+
+
+FOLDERS = [
+    LocalFolder(name="notes", path=Path("~/notes")),
+    LocalFolder(name="odd", path=Path(str(PureWindowsPath(r"C:\\Users\\me\\od\"d"))), patterns=["a/*.md", "**/*.md"]),
+]
+
+
+def test_folders_are_written_as_tables_that_read_back_the_same(tmp_path: Path) -> None:
+    config = Config(include=["me/*"], local_roots=[Path("~/projects")], local_folders=FOLDERS)
+    path = tmp_path / "repolore.toml"
+
+    text = write_config(path, config)
+
+    assert text.count("[[local_folders]]") == 2
+    assert text.index("local_roots") < text.index("[[local_folders]]")
+    assert load_config(path) == config
+
+
+def test_a_config_of_only_folders_reads_back_the_same(tmp_path: Path) -> None:
+    config = Config(local_folders=FOLDERS[:1])
+    path = tmp_path / "repolore.toml"
+
+    write_config(path, config)
+
+    assert load_config(path) == config
+
+
+def test_the_default_folder_pattern_is_left_out() -> None:
+    assert "patterns" not in config_text(Config(local_folders=FOLDERS[:1]))
+
+
+def test_replacing_a_config_keeps_what_setup_doesnt_ask_about(tmp_path: Path) -> None:
+    path = tmp_path / "repolore.toml"
+    write_config(path, Config(include=["old/*"], local_folders=FOLDERS, checkout_depth=4, max_local_files=9))
+
+    kept = with_unasked_settings(Config(include=["new/*"]), path)
+
+    assert kept == Config(include=["new/*"], local_folders=FOLDERS, checkout_depth=4, max_local_files=9)
+
+
+def test_nothing_to_replace_changes_nothing(tmp_path: Path) -> None:
+    config = Config(include=["new/*"])
+
+    assert with_unasked_settings(config, tmp_path / "missing.toml") == config
+
+
+@pytest.mark.parametrize("content", [b"include = [", b'nonsense = "key"\n', b"\xff\xfe"])
+def test_a_replaced_file_that_cant_be_read_is_just_replaced(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "repolore.toml"
+    path.write_bytes(content)
+    config = Config(include=["new/*"])
+
+    assert with_unasked_settings(config, path) == config
