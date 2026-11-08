@@ -253,6 +253,10 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   doesn't work. `clients.py` registers repolore: `claude mcp add --scope user`, and for Codex an entry appended to
   `$CODEX_HOME/config.toml` (`~/.codex`), since `codex mcp add` can't set the timeouts. A client that already has
   repolore is left alone.
+- `config_files.py` adds an entry to another app's JSON settings file. It reads JSON with comments and trailing commas,
+  and inserts the entry as text after the `{` of its object, so every other byte stays. It writes only if parsing the
+  result gives the old settings plus the entry, keeps one `<file>.repolore-backup` from before its first change, and
+  replaces the file atomically, following a symlink and keeping its mode.
 - `cli.py` is Typer wiring only. Logic lives in the stage modules.
 - `.claude-plugin/marketplace.json` makes the repo a Claude Code plugin marketplace whose one plugin is
   `plugins/repolore/`: `.mcp.json` registers `repolore-mcp`, and `hooks/hooks.json` runs `repolore session-start`
