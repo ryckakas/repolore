@@ -421,7 +421,7 @@ def never() -> list[Entry]:
 
 
 def client_with(*entries: Entry, health: Callable[[str], str | None] | None = None) -> McpClient:
-    return McpClient("Codex", lambda: True, lambda: list(entries), lambda: "added", "add it", health)
+    return McpClient("codex", "Codex", lambda: True, lambda: list(entries), lambda: "added", "add it", health)
 
 
 def connected(_: str) -> str:
@@ -465,7 +465,7 @@ def test_the_health_check_asks_about_the_entry_it_found() -> None:
 
 
 def test_a_client_that_isnt_installed_is_not_checked() -> None:
-    absent = McpClient("Codex", lambda: False, never, lambda: "added", "add it")
+    absent = McpClient("codex", "Codex", lambda: False, never, lambda: "added", "add it")
 
     assert registration_check(absent) is None
 
@@ -516,7 +516,7 @@ def test_a_listing_that_cant_be_read_fails(error: Exception) -> None:
     def broken() -> list[Entry]:
         raise error
 
-    check = registration_check(McpClient("Codex", lambda: True, broken, lambda: "added", "add it"))
+    check = registration_check(McpClient("codex", "Codex", lambda: True, broken, lambda: "added", "add it"))
 
     assert check == Check("Codex", False, f"can't list its MCP servers: {error}")
 
@@ -584,7 +584,7 @@ def test_the_build_engine_is_reported_and_never_fails(monkeypatch: pytest.Monkey
 
 @pytest.mark.usefixtures("env_token")
 def test_diagnose_skips_clients_that_arent_installed(data_paths: AppPaths) -> None:
-    absent = McpClient("Codex", lambda: False, never, lambda: "added", "add it")
+    absent = McpClient("codex", "Codex", lambda: False, never, lambda: "added", "add it")
 
     checks = list(diagnose(data_paths, "default", github_answering(), clients=[absent]))
 

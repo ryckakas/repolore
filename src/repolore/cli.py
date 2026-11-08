@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from repolore import __version__
 from repolore.chunking import Chunk, chunk_document, chunk_limit, count_split_sections
-from repolore.clients import CLIENTS, McpClient, RegistrationError, repolore_entries
+from repolore.clients import CLIENTS, McpClient, RegistrationError, named_clients, repolore_entries
 from repolore.config import Config, load_config
 from repolore.discovery import discover
 from repolore.doctor import diagnose, github_access
@@ -395,7 +395,11 @@ def setup(
         bool | None, typer.Option("--replace-config/--keep-config", help="Replace an existing repolore.toml or not.")
     ] = None,
     register_clients: Annotated[
-        bool | None, typer.Option("--register/--no-register", help="Register repolore with Claude Code and Codex.")
+        bool | None, typer.Option("--register/--no-register", help="Register repolore with the MCP clients it finds.")
+    ] = None,
+    only_clients: Annotated[
+        str | None,
+        typer.Option("--clients", help="Only these MCP clients, comma-separated, such as claude,codex."),
     ] = None,
     first_refresh: Annotated[
         bool | None, typer.Option("--refresh/--no-refresh", help="Start a refresh in the background.")
@@ -403,12 +407,14 @@ def setup(
     db: IndexOption = DEFAULT_INDEX,
 ) -> None:
     """Set repolore up: check GitHub access, pick the repos for repolore.toml, register the MCP server with the clients
-    on PATH and start the first refresh.
+    it finds and start the first refresh.
 
     Each question has a flag that answers it; --include, --exclude and --local-root together answer the repo picking.
     """
     paths: AppPaths = ctx.obj
     _print_version(paths)
+    with _exit_on(RegistrationError):
+        named = None if only_clients is None else named_clients(only_clients, CLIENTS)
     check, access = github_access(GitHubClient.connect)
     typer.echo(str(check))
     if access is None:
@@ -417,7 +423,7 @@ def setup(
         roots = checked_roots(local_root or [])
     chosen = Config(include=include or [], exclude=exclude or [], local_roots=roots)
     _setup_config(paths.config_file, None if chosen == Config() else chosen, replace_config)
-    registered = _setup_clients(register_clients)
+    registered = _setup_clients(register_clients, named)
     _setup_refresh(paths.data_dir, db, first_refresh)
     if not registered:
         raise typer.Exit(1)
@@ -474,21 +480,23 @@ def _asked(flag: bool | None, question: str, default: bool) -> bool:
     return typer.confirm(question, default=default) if flag is None else flag
 
 
-def _setup_clients(answer: bool | None) -> bool:
+def _setup_clients(answer: bool | None, named: list[McpClient] | None) -> bool:
     if answer is False:
         return True
     registered = True
-    for client in CLIENTS:
+    for client in CLIENTS if named is None else named:
         try:
-            _setup_client(client, answer)
+            _setup_client(client, answer, was_named=named is not None)
         except (OSError, subprocess.SubprocessError, RegistrationError) as error:
             typer.echo(f"{client.name}: couldn't register repolore: {error}", err=True)
             registered = False
     return registered
 
 
-def _setup_client(client: McpClient, answer: bool | None) -> None:
+def _setup_client(client: McpClient, answer: bool | None, was_named: bool) -> None:
     if not client.present():
+        if was_named:
+            raise RegistrationError("it wasn't found on this machine")
         typer.echo(f"{client.name}: not found, skipped.")
         return
     existing = [entry for entry in repolore_entries(client) if entry.for_every_project]

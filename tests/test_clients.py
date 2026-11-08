@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -11,18 +12,29 @@ import pytest
 from repolore.clients import (
     ADD_SECONDS,
     CLAUDE_CODE,
+    CLAUDE_DESKTOP,
+    CLIENTS,
     CODEX,
-    CODEX_PASSES_ON,
+    CURSOR,
+    DEVIN,
+    GEMINI,
     GET_SECONDS,
     LIST_SECONDS,
+    OPENCODE,
+    PASSED_ON,
     PLUGIN_SERVER,
+    RELAY,
+    VSCODE,
+    ZED,
     Entry,
     McpClient,
     RegistrationError,
     codex_home,
     is_connected,
+    named_clients,
     repolore_entries,
 )
+from repolore.config_files import parse_jsonc
 
 CLAUDE_HEALTHY = """repolore:
   Scope: User config (available in all your projects)
@@ -287,7 +299,7 @@ def test_an_entry_is_repolores_by_name_or_by_what_it_runs(
 def test_repolore_entries_leaves_other_servers_out() -> None:
     ours = Entry("repolore", ("repolore-mcp",), "user", "x")
     others = Entry("other", ("other-cmd",), "user", "x")
-    client = McpClient("Client", lambda: True, lambda: [others, ours], lambda: "added", "add it")
+    client = McpClient("client", "Client", lambda: True, lambda: [others, ours], lambda: "added", "add it")
 
     assert repolore_entries(client) == [ours]
 
@@ -391,7 +403,7 @@ def test_a_client_is_absent_when_its_cli_isnt(monkeypatch: pytest.MonkeyPatch, c
 def codex_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    for name in CODEX_PASSES_ON:
+    for name in PASSED_ON:
         monkeypatch.delenv(name, raising=False)
     return tmp_path
 
@@ -547,3 +559,463 @@ def test_codex_home_defaults_to_the_home_folder(monkeypatch: pytest.MonkeyPatch,
         monkeypatch.setenv("CODEX_HOME", value)
 
     assert codex_home() == Path.home() / ".codex"
+
+
+RELAY_AT = f"/tools/{RELAY}"
+
+
+@dataclass
+class Machine:
+    home: Path
+    project: Path
+    on_path: set[str] = field(default_factory=lambda: {RELAY})
+
+    def path(self, relative: str) -> Path:
+        return self.home.joinpath(*relative.split("/"))
+
+    def write(self, relative: str, text: str) -> Path:
+        path = self.path(relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+
+@pytest.fixture
+def machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Machine:
+    made = Machine(tmp_path / "home", tmp_path / "project")
+    made.home.mkdir()
+    made.project.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: made.home)
+    monkeypatch.chdir(made.project)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda command: f"/tools/{command}" if command in made.on_path else None)
+    for name in (*PASSED_ON, "APPDATA", "LOCALAPPDATA", "GEMINI_CLI_HOME"):
+        monkeypatch.delenv(name, raising=False)
+    return made
+
+
+DESKTOP_FILE = "claude_desktop_config.json"
+USER_FILES = [
+    (CLAUDE_DESKTOP, "linux", f".config/Claude/{DESKTOP_FILE}", ("mcpServers",)),
+    (CLAUDE_DESKTOP, "darwin", f"Library/Application Support/Claude/{DESKTOP_FILE}", ("mcpServers",)),
+    (CLAUDE_DESKTOP, "win32", f"AppData/Roaming/Claude/{DESKTOP_FILE}", ("mcpServers",)),
+    (GEMINI, "linux", ".gemini/settings.json", ("mcpServers",)),
+    (GEMINI, "win32", ".gemini/settings.json", ("mcpServers",)),
+    (CURSOR, "linux", ".cursor/mcp.json", ("mcpServers",)),
+    (CURSOR, "win32", ".cursor/mcp.json", ("mcpServers",)),
+    (VSCODE, "linux", ".config/Code/User/mcp.json", ("servers",)),
+    (VSCODE, "darwin", "Library/Application Support/Code/User/mcp.json", ("servers",)),
+    (VSCODE, "win32", "AppData/Roaming/Code/User/mcp.json", ("servers",)),
+    (ZED, "linux", ".config/zed/settings.json", ("context_servers",)),
+    (ZED, "darwin", ".config/zed/settings.json", ("context_servers",)),
+    (ZED, "win32", "AppData/Roaming/Zed/settings.json", ("context_servers",)),
+    (OPENCODE, "linux", ".config/opencode/opencode.json", ("mcp",)),
+    (OPENCODE, "win32", ".config/opencode/opencode.json", ("mcp",)),
+]
+
+
+def added_entry(client: McpClient, *keys: str) -> dict[str, Any]:
+    path = Path(client.add().removeprefix("in ").partition(";")[0])
+    settings = json.loads(path.read_bytes())
+    for key in keys:
+        settings = settings[key]
+    return settings["repolore"]
+
+
+@pytest.mark.parametrize(("client", "platform", "relative", "keys"), USER_FILES)
+def test_a_file_client_writes_its_own_file_and_finds_what_it_wrote(
+    machine: Machine,
+    monkeypatch: pytest.MonkeyPatch,
+    client: McpClient,
+    platform: str,
+    relative: str,
+    keys: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+
+    assert client.add().startswith(f"in {machine.path(relative)}")
+
+    settings = json.loads(machine.path(relative).read_bytes())
+    for key in keys:
+        settings = settings[key]
+    assert "repolore" in settings
+    assert [(entry.name, entry.scope, entry.for_every_project) for entry in repolore_entries(client)] == [
+        ("repolore", "user", True)
+    ]
+
+
+@pytest.mark.usefixtures("machine")
+@pytest.mark.parametrize(
+    ("client", "keys", "expected"),
+    [
+        (GEMINI, ("mcpServers",), {"command": RELAY, "args": [], "env": {}}),
+        (CLAUDE_DESKTOP, ("mcpServers",), {"command": RELAY_AT, "args": [], "env": {}}),
+        (CURSOR, ("mcpServers",), {"type": "stdio", "command": RELAY_AT, "args": [], "env": {}}),
+        (VSCODE, ("servers",), {"type": "stdio", "command": RELAY_AT}),
+        (ZED, ("context_servers",), {"command": RELAY_AT, "args": [], "env": {}, "timeout": 300}),
+        (OPENCODE, ("mcp",), {"type": "local", "command": [RELAY_AT], "enabled": True, "timeout": 300_000}),
+    ],
+)
+def test_each_file_client_gets_the_entry_it_expects(
+    client: McpClient, keys: tuple[str, ...], expected: dict[str, Any]
+) -> None:
+    assert added_entry(client, *keys) == expected
+
+
+def test_claude_desktop_never_gets_the_token_but_gets_what_isnt_secret(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPOLORE_GITHUB_TOKEN", "secret-token")
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:pass@proxy")
+    monkeypatch.setenv("XDG_DATA_HOME", "/data")
+    monkeypatch.setenv("REPOLORE_DEVICE", "cpu")
+
+    env = added_entry(CLAUDE_DESKTOP, "mcpServers")["env"]
+
+    assert env == {"REPOLORE_DEVICE": "cpu", "XDG_DATA_HOME": "/data"}
+    assert b"secret-token" not in machine.path(f".config/Claude/{DESKTOP_FILE}").read_bytes()
+
+
+def test_cursor_gets_references_to_the_variables_that_are_set(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPOLORE_GITHUB_TOKEN", "secret-token")
+    monkeypatch.setenv("HTTPS_PROXY", "")
+
+    assert added_entry(CURSOR, "mcpServers")["env"] == {"REPOLORE_GITHUB_TOKEN": "${env:REPOLORE_GITHUB_TOKEN}"}
+    assert b"secret-token" not in machine.path(".cursor/mcp.json").read_bytes()
+
+
+def test_claude_desktop_says_to_restart_it(machine: Machine) -> None:
+    assert CLAUDE_DESKTOP.add() == (
+        f"in {machine.path(f'.config/Claude/{DESKTOP_FILE}')}; quit and restart Claude Desktop to load it"
+    )
+
+
+def test_claude_desktops_store_install_wins_over_its_usual_folder(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    machine.path("AppData/Roaming/Claude").mkdir(parents=True)
+    packaged = machine.path("AppData/Local/Packages/Claude_abc123/LocalCache/Roaming/Claude")
+    packaged.mkdir(parents=True)
+
+    assert CLAUDE_DESKTOP.present()
+    assert CLAUDE_DESKTOP.add().startswith(f"in {packaged / DESKTOP_FILE}")
+    assert not machine.path(f"AppData/Roaming/Claude/{DESKTOP_FILE}").exists()
+
+
+def test_windows_folders_follow_their_variables(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(machine.path("elsewhere/roaming")))
+
+    assert CLAUDE_DESKTOP.add().startswith(f"in {machine.path(f'elsewhere/roaming/Claude/{DESKTOP_FILE}')}")
+
+
+def test_xdg_config_home_moves_the_linux_folders(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(machine.path("xdg")))
+
+    assert ZED.add().startswith(f"in {machine.path('xdg/zed/settings.json')}")
+
+
+def test_zed_on_a_mac_ignores_xdg_config_home(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(machine.path("xdg")))
+
+    assert ZED.add().startswith(f"in {machine.path('.config/zed/settings.json')}")
+
+
+def test_a_file_client_keeps_what_the_file_already_has(machine: Machine) -> None:
+    original = '{\n  // my theme\n  "theme": "dark",\n}\n'
+    path = machine.write(".config/zed/settings.json", original)
+
+    ZED.add()
+
+    text = path.read_text(encoding="utf-8")
+    assert "// my theme" in text
+    assert '"theme": "dark"' in text
+    assert path.with_name("settings.json.repolore-backup").read_text(encoding="utf-8") == original
+
+
+def test_a_file_client_without_the_relay_on_path_is_refused(machine: Machine) -> None:
+    machine.on_path.clear()
+
+    with pytest.raises(RegistrationError, match=f"`{RELAY}` isn't on PATH"):
+        CURSOR.add()
+
+    assert not machine.path(".cursor/mcp.json").exists()
+
+
+def test_a_relay_inside_this_environment_isnt_recorded(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "prefix", "/tools")
+
+    with pytest.raises(RegistrationError, match="checkout or temporary environment"):
+        CURSOR.add()
+
+    assert not machine.path(".cursor/mcp.json").exists()
+
+
+def test_a_settings_file_it_cant_change_is_a_registration_error(machine: Machine) -> None:
+    path = machine.write(".cursor/mcp.json", "{ not json")
+
+    with pytest.raises(RegistrationError, match="isn't valid JSON") as caught:
+        CURSOR.add()
+
+    assert str(path) in str(caught.value)
+
+
+def test_an_unreadable_settings_file_fails_the_listing(machine: Machine) -> None:
+    path = machine.write(".cursor/mcp.json", "{ not json")
+
+    with pytest.raises(RegistrationError, match="can't read") as caught:
+        CURSOR.entries()
+
+    assert str(path) in str(caught.value)
+
+
+@pytest.mark.usefixtures("machine")
+def test_a_client_with_no_settings_has_no_entries() -> None:
+    assert CURSOR.entries() == []
+
+
+def test_a_blank_settings_file_has_no_entries(machine: Machine) -> None:
+    machine.write(".cursor/mcp.json", "  \n")
+
+    assert CURSOR.entries() == []
+
+
+def test_a_settings_file_with_comments_is_listed(machine: Machine) -> None:
+    machine.write(
+        ".config/zed/settings.json", '{\n  // servers\n  "context_servers": {"mine": {"command": "repolore-mcp",},},\n}'
+    )
+
+    assert [entry.name for entry in repolore_entries(ZED)] == ["mine"]
+
+
+def test_this_folders_project_file_is_listed_as_not_for_every_project(machine: Machine) -> None:
+    path = machine.project / ".cursor" / "mcp.json"
+    path.parent.mkdir()
+    write_json(path, {"mcpServers": {"repolore": RELAY_SERVER}})
+
+    assert CURSOR.entries() == [
+        Entry("repolore", ("repolore-mcp",), "project", f"delete repolore from {path}", for_every_project=False)
+    ]
+
+
+def test_a_user_file_isnt_counted_twice_from_its_own_folder(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_json(machine.write(".cursor/mcp.json", ""), {"mcpServers": {"repolore": RELAY_SERVER}})
+    monkeypatch.chdir(machine.home)
+
+    assert [entry.scope for entry in CURSOR.entries()] == ["user"]
+
+
+def test_vscode_project_servers_are_under_its_own_key(machine: Machine) -> None:
+    path = machine.project / ".vscode" / "mcp.json"
+    path.parent.mkdir()
+    write_json(path, {"servers": {"repolore": RELAY_SERVER}})
+
+    assert [entry.scope for entry in VSCODE.entries()] == ["project"]
+
+
+def test_opencode_prefers_an_existing_commented_file(machine: Machine) -> None:
+    path = machine.write(".config/opencode/opencode.jsonc", "// mine\n{}\n")
+
+    assert OPENCODE.add() == f"in {path}"
+    assert not machine.path(".config/opencode/opencode.json").exists()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"mcp": {"mine": {"type": "local", "command": ["repolore-mcp", "-x"]}}},
+        {"mcp": {"servers": {"mine": {"type": "local", "command": ["repolore-mcp", "-x"]}}}},
+    ],
+)
+def test_opencode_servers_are_found_in_both_shapes(machine: Machine, settings: dict[str, Any]) -> None:
+    write_json(machine.write(".config/opencode/opencode.json", ""), settings)
+
+    assert [(entry.name, entry.command) for entry in repolore_entries(OPENCODE)] == [("mine", ("repolore-mcp", "-x"))]
+
+
+@pytest.mark.parametrize("name", ["opencode.json", "opencode.jsonc"])
+def test_opencode_project_files_of_either_name_are_listed(machine: Machine, name: str) -> None:
+    write_json(machine.project / name, {"mcp": {"repolore": {"command": ["repolore-mcp"]}}})
+
+    assert [entry.scope for entry in repolore_entries(OPENCODE)] == ["project"]
+
+
+def test_opencode_gets_its_flat_entry_beside_existing_v2_servers(machine: Machine) -> None:
+    path = machine.write(".config/opencode/opencode.json", '{\n  "mcp": {\n    "servers": {"other": {}}\n  }\n}\n')
+
+    OPENCODE.add()
+
+    mcp = parse_jsonc(path.read_text(encoding="utf-8"))["mcp"]
+    assert mcp["servers"] == {"other": {}}
+    assert mcp["repolore"]["command"] == [RELAY_AT]
+
+
+def test_gemini_gets_references_to_the_variables_that_are_set(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REPOLORE_GITHUB_TOKEN", "secret-token")
+
+    assert added_entry(GEMINI, "mcpServers")["env"] == {"REPOLORE_GITHUB_TOKEN": "$REPOLORE_GITHUB_TOKEN"}
+    assert b"secret-token" not in machine.path(".gemini/settings.json").read_bytes()
+
+
+def test_a_refused_devin_registration_names_it(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    machine.on_path.add("devin")
+    answer(monkeypatch, [], ADD_SECONDS, 4)
+
+    with pytest.raises(RegistrationError, match="`devin mcp add` exited with 4"):
+        DEVIN.add()
+
+
+def test_gemini_lists_its_user_and_project_files(machine: Machine) -> None:
+    write_json(machine.write(".gemini/settings.json", ""), {"mcpServers": {"repolore": RELAY_SERVER}})
+    project = machine.project / ".gemini" / "settings.json"
+    project.parent.mkdir()
+    write_json(project, {"mcpServers": {"mine": RELAY_SERVER}})
+
+    assert [(entry.name, entry.scope) for entry in repolore_entries(GEMINI)] == [
+        ("repolore", "user"),
+        ("mine", "project"),
+    ]
+
+
+def test_gemini_cli_home_moves_its_settings(machine: Machine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(machine.path("elsewhere")))
+    write_json(machine.write("elsewhere/.gemini/settings.json", ""), {"mcpServers": {"repolore": RELAY_SERVER}})
+
+    assert [entry.scope for entry in repolore_entries(GEMINI)] == ["user"]
+
+
+def test_devin_registers_for_the_user_with_the_relays_full_path(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine.on_path.add("devin")
+    monkeypatch.setenv("XDG_DATA_HOME", "/data")
+    runs: list[list[str]] = []
+    answer(monkeypatch, runs, ADD_SECONDS, 0)
+
+    assert DEVIN.add() == "for every project (user scope)"
+    assert runs == [
+        [
+            "/tools/devin",
+            "mcp",
+            "add",
+            "-s",
+            "user",
+            "-e",
+            "XDG_DATA_HOME=${env:XDG_DATA_HOME}",
+            "repolore",
+            "--",
+            RELAY_AT,
+        ]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("platform", "relative"),
+    [("linux", ".config/devin/mcp_config.json"), ("win32", "AppData/Roaming/devin/mcp_config.json")],
+)
+def test_devin_lists_its_user_file(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch, platform: str, relative: str
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    write_json(machine.write(relative, ""), {"mcpServers": {"repolore": RELAY_SERVER}})
+
+    assert [entry.scope for entry in repolore_entries(DEVIN)] == ["user"]
+
+
+@pytest.mark.parametrize("name", ["mcp_config.json", "mcp_config.local.json"])
+def test_devin_lists_both_project_files(machine: Machine, name: str) -> None:
+    path = machine.project / ".devin" / name
+    path.parent.mkdir()
+    write_json(path, {"mcpServers": {"repolore": RELAY_SERVER}})
+
+    assert [entry.scope for entry in repolore_entries(DEVIN)] == ["project"]
+
+
+@pytest.mark.usefixtures("machine")
+@pytest.mark.parametrize("client", CLIENTS)
+def test_nothing_on_the_machine_means_no_client_is_present(client: McpClient) -> None:
+    assert not client.present()
+
+
+@pytest.mark.parametrize(
+    ("client", "command"),
+    [
+        (GEMINI, "gemini"),
+        (CURSOR, "agent"),
+        (VSCODE, "code"),
+        (OPENCODE, "opencode"),
+        (OPENCODE, "opencode2"),
+        (DEVIN, "devin"),
+    ],
+)
+def test_a_client_is_found_by_its_command(machine: Machine, client: McpClient, command: str) -> None:
+    machine.on_path.add(command)
+
+    assert client.present()
+
+
+def test_a_gemini_folder_without_the_cli_isnt_gemini(machine: Machine) -> None:
+    machine.path(".gemini").mkdir()
+
+    assert not GEMINI.present()
+
+
+@pytest.mark.parametrize(
+    ("client", "platform", "folder"),
+    [
+        (CLAUDE_DESKTOP, "linux", ".config/Claude"),
+        (CLAUDE_DESKTOP, "darwin", "Library/Application Support/Claude"),
+        (CLAUDE_DESKTOP, "win32", "AppData/Roaming/Claude"),
+        (CURSOR, "linux", ".cursor"),
+        (VSCODE, "linux", ".config/Code/User"),
+        (VSCODE, "darwin", "Library/Application Support/Code/User"),
+        (VSCODE, "win32", "AppData/Roaming/Code/User"),
+        (ZED, "linux", ".local/share/zed"),
+        (ZED, "darwin", "Library/Application Support/Zed"),
+        (ZED, "win32", "AppData/Local/Zed"),
+    ],
+)
+def test_a_client_is_found_by_its_folder(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch, client: McpClient, platform: str, folder: str
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    machine.path(folder).mkdir(parents=True)
+
+    assert client.present()
+
+
+def test_zeds_config_folder_alone_isnt_zed(machine: Machine) -> None:
+    machine.path(".config/zed").mkdir(parents=True)
+
+    assert not ZED.present()
+
+
+def test_every_client_has_its_own_key() -> None:
+    keys = [client.key for client in CLIENTS]
+
+    assert len(keys) == 9
+    assert len(set(keys)) == len(keys)
+
+
+def test_clients_are_named_by_key_in_the_order_given() -> None:
+    assert named_clients("codex,claude", CLIENTS) == [CODEX, CLAUDE_CODE]
+
+
+def test_one_client_can_be_named() -> None:
+    assert named_clients("zed", CLIENTS) == [ZED]
+
+
+def test_spaces_and_repeats_in_client_names_dont_matter() -> None:
+    assert named_clients(" zed , cursor,zed,", CLIENTS) == [ZED, CURSOR]
+
+
+@pytest.mark.parametrize("names", ["", " , ", "zed,nope", "Zed"])
+def test_a_list_without_known_clients_is_refused_naming_the_choices(names: str) -> None:
+    with pytest.raises(RegistrationError, match="comma-separated list of claude, codex, gemini"):
+        named_clients(names, CLIENTS)
