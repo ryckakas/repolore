@@ -26,6 +26,7 @@ from repolore.documents import Document
 from repolore.embedding import ModelUnavailableError
 from repolore.embedding.engines import EngineChoice
 from repolore.embedding.local import VOYAGE_NANO, LocalModel, onnx_engine
+from repolore.ingest import OutdatedCacheError
 from repolore.locks import hold
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report
@@ -934,6 +935,38 @@ def test_a_failed_refresh_records_the_failure(cached_crashcause: Path, monkeypat
     assert not (cached_crashcause / "db" / "default.db").exists()
     status = refresh_status(cached_crashcause)
     assert (status.ok, status.error) == (False, "No GitHub token")
+
+
+OUTDATED_CACHE = "The cached data for ryckakas/crashcause is from an older repolore; run `repolore ingest --full`."
+
+
+def test_build_on_an_outdated_cache_says_what_to_run_in_one_line(cached_crashcause: Path) -> None:
+    pulls_file = cached_crashcause / "raw" / "ryckakas" / "crashcause" / "pulls.json"
+    pulls = json.loads(pulls_file.read_text(encoding="utf-8"))
+    del pulls[0]["headRefName"]
+    pulls_file.write_text(json.dumps(pulls), encoding="utf-8")
+
+    result = runner.invoke(app, ["build"])
+
+    assert result.exit_code == 1
+    assert result.output.splitlines()[-1] == OUTDATED_CACHE
+    assert "validation error" not in result.output
+
+
+def test_a_refresh_on_an_outdated_cache_records_what_to_run(
+    cached_crashcause: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def outdated(*_: object) -> list[Document]:
+        raise OutdatedCacheError(OUTDATED_CACHE)
+
+    online(monkeypatch)
+    monkeypatch.setattr("repolore.cli.ingest_repos", outdated)
+
+    result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 1
+    status = refresh_status(cached_crashcause)
+    assert (status.ok, status.error) == (False, OUTDATED_CACHE)
 
 
 def test_refresh_refuses_while_another_runs(cached_crashcause: Path) -> None:

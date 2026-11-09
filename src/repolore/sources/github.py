@@ -5,9 +5,10 @@ import os
 import subprocess
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass, fields
 from datetime import UTC, datetime
+from fnmatch import fnmatchcase
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
@@ -263,21 +264,29 @@ def _searched_repositories(client: GitHubClient, query: str) -> list[str]:
     return list(names)
 
 
-def fetch_repo(client: GitHubClient, repo: str, cached: RawRepo | None = None) -> RawRepo:
-    """Everything in a repo; with a cached copy, only what changed since it was fetched."""
+def fetch_repo(
+    client: GitHubClient, repo: str, cached: RawRepo | None = None, branch_patterns: Sequence[str] = ()
+) -> RawRepo:
+    """Everything in a repo; with a cached copy, only what changed since it was fetched.
+
+    Commits come from the default branch and from every branch a pattern matches.
+    """
     owner, name = repo.split("/")
     info = _repo_info(client, repo)
-    branch = (info["defaultBranchRef"] or {}).get("name")
+    default = info["defaultBranchRef"]
+    branch = default["name"] if default else None
     pulls, fetched_pulls = _fetch_updated(
         client, "RepoPullRequests", "pullRequests", cached.pulls if cached else [], owner=owner, name=name
     )
     _log_truncation(repo, fetched_pulls)
     issues, _ = _fetch_updated(client, "RepoIssues", "issues", cached.issues if cached else [], owner=owner, name=name)
+    tips = _branch_tips(client, repo, default["target"]["oid"], branch_patterns) if default else []
     return RawRepo(
-        info=info,
+        # `build` doesn't read the config, and needs the patterns to tell a promotion PR from a feature PR.
+        info=info | {"branchPatterns": list(branch_patterns)},
         pulls=pulls,
         issues=issues,
-        commits=_fetch_commits(client, owner, name, cached.commits if cached else []) if branch else [],
+        commits=_fetch_commits(client, owner, name, tips, cached.commits if cached else []),
         docs=_fetch_docs(client, repo, branch, cached.docs if cached else []) if branch else [],
     )
 
@@ -322,7 +331,11 @@ def _search(data: Json) -> Json:
 
 
 def _history(data: Json) -> Json:
-    return data["repository"]["defaultBranchRef"]["target"]["history"]
+    return data["repository"]["object"]["history"]
+
+
+def _refs(data: Json) -> Json:
+    return data["repository"]["refs"]
 
 
 def _fetch_updated(
@@ -338,27 +351,52 @@ def _fetch_updated(
         fresh += newer
         if len(newer) < len(nodes):
             break
-    return _merge(cached if watermark else [], fresh, "number"), fresh
+    return _merge(cached, fresh, "number"), fresh
 
 
-def _fetch_commits(client: GitHubClient, owner: str, name: str, cached: list[Json]) -> list[Json]:
-    since = _watermark(cached, "committedDate")
-    kept = cached if since else []
-    # An oid fixes a commit's content, and a cached node may hold GitHub's PR answer, which history no longer asks for.
-    known = {node["oid"] for node in kept}
-    fresh = [
-        node
-        for data in _pages(client, "DefaultBranchHistory", _history, owner=owner, name=name, since=since)
-        for node in _history(data)["nodes"]
-        if node["oid"] not in known
-    ]
-    return [*kept, *fresh]
+def _branch_tips(client: GitHubClient, repo: str, default_tip: str, patterns: Sequence[str]) -> list[str]:
+    """The commit at the tip of the default branch and of each branch a pattern matches, in a stable order."""
+    if not patterns:
+        return [default_tip]
+    owner, name = repo.split("/")
+    tips = {
+        node["name"]: node["target"]["oid"]
+        for data in _pages(client, "RepoBranches", _refs, owner=owner, name=name)
+        for node in _refs(data)["nodes"]
+    }
+    for pattern in patterns:
+        if not any(fnmatchcase(branch, pattern) for branch in tips):
+            log.warning("%s: no branch matches %s", repo, pattern)
+    matched = sorted(branch for branch in tips if any(fnmatchcase(branch, pattern) for pattern in patterns))
+    log.info("%s: reading the commits of %d matching branches", repo, len(matched))
+    return [default_tip, *(tips[branch] for branch in matched)]
+
+
+def _fetch_commits(client: GitHubClient, owner: str, name: str, tips: list[str], cached: list[Json]) -> list[Json]:
+    commits = {node["oid"]: node for node in cached}
+    for tip in tips:
+        if tip not in commits:
+            commits.update(_unseen_history(client, owner, name, tip, commits.keys()))
+    return list(commits.values())
+
+
+def _unseen_history(client: GitHubClient, owner: str, name: str, tip: str, known: Collection[str]) -> dict[str, Json]:
+    """The commits reachable from a tip that aren't known yet, walked until every parent is accounted for."""
+    # History is ordered by date, so known commits can sit between unseen ones: only the parents say when it's finished.
+    fresh: dict[str, Json] = {}
+    awaited = {tip}
+    for data in _pages(client, "CommitHistory", _history, owner=owner, name=name, tip=tip):
+        unseen = [node for node in _history(data)["nodes"] if node["oid"] not in known]
+        fresh.update((node["oid"], node) for node in unseen)
+        awaited.update(parent["oid"] for node in unseen for parent in node["parents"]["nodes"])
+        awaited = {oid for oid in awaited if oid not in known and oid not in fresh}
+        if not awaited:
+            break
+    return fresh
 
 
 def _watermark(cached: list[Json], field: str) -> str | None:
-    # A cache written before incremental fetching lacks the field; then everything is fetched again.
-    stamps = [node.get(field, "") for node in cached]
-    return max(stamps) if stamps and all(stamps) else None
+    return max((node[field] for node in cached), default=None)
 
 
 def _merge(cached: list[Json], fresh: list[Json], key: str) -> list[Json]:

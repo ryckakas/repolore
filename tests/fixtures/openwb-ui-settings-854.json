@@ -23,7 +23,8 @@
    {
     "commit": {
      "messageHeadline": "remove v-html",
-     "messageBody": ""
+     "messageBody": "",
+     "oid": "09f692594af3b35facf625ed245b2c1875184e43"
     }
    }
   ]
@@ -132,5 +133,8 @@
     }
    }
   ]
- }
+ },
+ "headRefName": "fix",
+ "isCrossRepository": true,
+ "mergeCommit": null
 }

@@ -140,7 +140,17 @@ same way. See [MCP clients](https://github.com/ryckakas/repolore#mcp-clients) fo
    name = "notes"                              # search it as --repo local/notes
    path = "~/notes"                            # absolute or ~, a folder or one file
    patterns = ["**/*.md"]                      # optional, for a folder
+
+   [[branches]]                                # commits from more than the default branch; repeat for more
+   repo = "your-org/app"                       # a glob over owner/name
+   patterns = ["staging/*", "live/*"]          # globs over branch names, case-sensitive
    ```
+
+   Commits are read from the default branch and from any others `[[branches]]` names, and a commit is indexed only
+   when no PR has it. A PR from one of these branches doesn't count, so a fix pushed to `staging/x` and released by a
+   `staging/x` to `live/x` PR is still found. A release through a branch you haven't listed counts as that commit's
+   PR, so list that branch too. A PR's commit cherry-picked onto another branch is indexed once, repeating the PR.
+   Removing a pattern or deleting a branch leaves its commits in the index until `repolore ingest --full`.
 
 2. Fetch and index:
 

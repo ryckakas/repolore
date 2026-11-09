@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from repolore.chunking import chunk_document
 from repolore.documents import GHOST, Document, DocumentKind, Visibility, documents_from, local_documents
@@ -204,8 +205,7 @@ def test_only_commits_without_a_pull_request_are_kept() -> None:
 
 
 def fetched_commit(oid: str) -> dict[str, Any]:
-    pr_less = {key: value for key, value in CRASHCAUSE.commits[2].items() if key != "associatedPullRequests"}
-    return pr_less | {"oid": oid}
+    return CRASHCAUSE.commits[1] | {"oid": oid, "url": f"https://github.com/ryckakas/crashcause/commit/{oid}"}
 
 
 def commit_kinds(raw: RawRepo) -> list[DocumentKind]:
@@ -225,27 +225,114 @@ def test_a_fetched_commit_is_matched_to_the_pull_requests_by_oid(oid: str, kept:
     assert commit_kinds(crashcause(commits=[fetched_commit(oid)])) == ([DocumentKind.COMMIT] if kept else [])
 
 
+@pytest.mark.parametrize(
+    ("parents", "kept"),
+    [
+        pytest.param(0, True, id="a root commit"),
+        pytest.param(1, True, id="one parent"),
+        pytest.param(2, False, id="a merge"),
+    ],
+)
+def test_only_a_merge_is_left_out_for_its_parents(parents: int, kept: bool) -> None:
+    node = fetched_commit("a" * 40) | {"parents": {"totalCount": parents, "nodes": []}}
+
+    assert commit_kinds(crashcause(commits=[node])) == ([DocumentKind.COMMIT] if kept else [])
+
+
 def test_a_repo_without_pull_requests_keeps_its_commits() -> None:
     raw = crashcause(pulls=[], commits=[fetched_commit("1639e4be1a8b129f403d643aad437f01d25c0c8e")])
 
     assert commit_kinds(raw) == [DocumentKind.COMMIT]
 
 
-def test_a_commit_cached_with_githubs_answer_keeps_it() -> None:
-    cached = fetched_commit("1639e4be1a8b129f403d643aad437f01d25c0c8e") | {"associatedPullRequests": {"totalCount": 0}}
-
-    assert commit_kinds(crashcause(commits=[cached])) == [DocumentKind.COMMIT]
-
-
-def test_pull_requests_cached_without_oids_still_load() -> None:
+def on_a_pull_from(
+    head: str,
+    patterns: list[str],
+    oid: str = "1639e4be1a8b129f403d643aad437f01d25c0c8e",
+    cross_repository: bool = False,
+) -> RawRepo:
     pulls = copy.deepcopy(CRASHCAUSE.pulls)
-    del pulls[0]["mergeCommit"]
-    for node in pulls[0]["commits"]["nodes"]:
-        del node["commit"]["oid"]
+    for pull in pulls:
+        pull |= {"headRefName": head, "isCrossRepository": cross_repository}
+    return crashcause(info=CRASHCAUSE.info | {"branchPatterns": patterns}, pulls=pulls, commits=[fetched_commit(oid)])
 
-    documents = documents_from(crashcause(pulls=pulls))
 
-    assert by_url(documents, BUILT_PULL).kind is DocumentKind.PR
+@pytest.mark.parametrize(
+    ("head", "patterns", "cross_repository", "kept"),
+    [
+        pytest.param(
+            "staging/acme", ["staging/*"], False, True, id="a promotion, whether or not the branch still exists"
+        ),
+        pytest.param("main", ["staging/*"], False, True, id="from the default branch"),
+        pytest.param("fix/ci", ["staging/*"], False, False, id="a feature pull request"),
+        pytest.param("Staging/acme", ["staging/*"], False, False, id="branch names are case-sensitive"),
+        pytest.param("main", ["staging/*"], True, False, id="a fork's branch"),
+        pytest.param("staging/acme", ["staging/*"], True, False, id="a fork's branch that matches"),
+        pytest.param("main", [], False, False, id="no branch rules"),
+    ],
+)
+def test_only_a_pull_request_from_an_indexed_branch_leaves_its_commits_indexed(
+    head: str, patterns: list[str], cross_repository: bool, kept: bool
+) -> None:
+    raw = on_a_pull_from(head, patterns, cross_repository=cross_repository)
+
+    assert commit_kinds(raw) == ([DocumentKind.COMMIT] if kept else [])
+
+
+def test_a_promotions_merge_commit_is_still_left_out() -> None:
+    raw = on_a_pull_from("staging/acme", ["staging/*"], oid="f662f5cd0424f99d6af7b0281f14a43402e6c2cb")
+
+    assert commit_kinds(raw) == []
+
+
+def commit_urls(raw: RawRepo) -> list[str]:
+    return [document.url for document in documents_from(raw) if document.kind is DocumentKind.COMMIT]
+
+
+def test_a_cherry_pick_on_another_branch_is_one_document_and_the_first_stays() -> None:
+    original = fetched_commit("a" * 40)
+    picked = fetched_commit("b" * 40) | {
+        "messageBody": f"{original['messageBody']}\n\n(cherry picked from commit {'a' * 40})",
+        "committedDate": "2026-09-01T00:00:00Z",
+    }
+
+    assert commit_urls(crashcause(commits=[original, picked])) == [original["url"]]
+
+
+def test_a_copy_of_a_pull_requests_commit_is_kept_when_the_pull_request_claims_the_first() -> None:
+    claimed = fetched_commit("1639e4be1a8b129f403d643aad437f01d25c0c8e")
+    picked = fetched_commit("b" * 40)
+
+    assert commit_urls(crashcause(commits=[claimed, picked])) == [picked["url"]]
+
+
+@pytest.mark.parametrize(
+    "difference",
+    [
+        pytest.param({"authoredDate": "2026-09-01T00:00:00Z"}, id="written at another time"),
+        pytest.param({"author": {"name": "Someone Else", "user": None}}, id="another author"),
+        pytest.param({"messageHeadline": "Another headline"}, id="another headline"),
+    ],
+)
+def test_commits_that_differ_in_identity_are_both_kept(difference: dict[str, Any]) -> None:
+    other = fetched_commit("b" * 40) | difference
+
+    assert len(commit_urls(crashcause(commits=[fetched_commit("a" * 40), other]))) == 2
+
+
+@pytest.mark.parametrize(
+    ("items", "field"),
+    [
+        pytest.param("pulls", "headRefName", id="a pull request without its source branch"),
+        pytest.param("commits", "authoredDate", id="a commit without its authored date"),
+    ],
+)
+def test_a_cached_node_without_a_required_field_is_refused(items: str, field: str) -> None:
+    changed = copy.deepcopy(getattr(CRASHCAUSE, items))
+    del changed[0][field]
+
+    with pytest.raises(ValidationError):
+        documents_from(crashcause(**{items: changed}))
 
 
 def test_commit_headline_is_rejoined_and_claude_trailer_stripped() -> None:
@@ -259,7 +346,7 @@ def test_commit_headline_is_rejoined_and_claude_trailer_stripped() -> None:
 
 
 def test_commit_without_github_user_is_attributed_to_its_git_name() -> None:
-    commits = edited(CRASHCAUSE.commits, 2, author={"name": "Someone Offline", "user": None})
+    commits = edited(CRASHCAUSE.commits, 1, author={"name": "Someone Offline", "user": None})
 
     commit = by_url(documents_from(crashcause(commits=commits)), PR_LESS_COMMIT)
 
@@ -267,7 +354,7 @@ def test_commit_without_github_user_is_attributed_to_its_git_name() -> None:
 
 
 def test_bot_commit_is_dropped() -> None:
-    commits = edited(CRASHCAUSE.commits, 2, author={"name": "dependabot[bot]", "user": None})
+    commits = edited(CRASHCAUSE.commits, 1, author={"name": "dependabot[bot]", "user": None})
 
     kinds = {document.kind for document in documents_from(crashcause(commits=commits))}
 

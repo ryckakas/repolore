@@ -7,7 +7,7 @@ query RepoInfo($owner: String!, $name: String!) {
     nameWithOwner
     url
     isPrivate
-    defaultBranchRef { name }
+    defaultBranchRef { name target { oid } }
   }
 }
 
@@ -75,22 +75,30 @@ query RepoIssues($owner: String!, $name: String!, $after: String) {
   }
 }
 
-query DefaultBranchHistory($owner: String!, $name: String!, $after: String, $since: GitTimestamp) {
+query RepoBranches($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    defaultBranchRef {
-      target {
-        ... on Commit {
-          history(first: 100, after: $after, since: $since) {
-            pageInfo { hasNextPage endCursor }
-            nodes {
-              oid
-              url
-              messageHeadline
-              messageBody
-              committedDate
-              parents { totalCount }
-              author { name user { login } }
-            }
+    refs(refPrefix: "refs/heads/", first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { name target { oid } }
+    }
+  }
+}
+
+query CommitHistory($owner: String!, $name: String!, $tip: GitObjectID!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    object(oid: $tip) {
+      ... on Commit {
+        history(first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            oid
+            url
+            messageHeadline
+            messageBody
+            authoredDate
+            committedDate
+            parents(first: 10) { totalCount nodes { oid } }
+            author { name user { login } }
           }
         }
       }
@@ -122,6 +130,8 @@ fragment PRFields on PullRequest {
   createdAt
   updatedAt
   mergeCommit { oid }
+  headRefName
+  isCrossRepository
   author { login __typename }
   files(first: 100) {
     totalCount

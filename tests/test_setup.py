@@ -6,7 +6,7 @@ from pathlib import Path, PureWindowsPath
 import pytest
 from pydantic import ValidationError
 
-from repolore.config import Config, LocalFolder, load_config
+from repolore.config import BranchRule, Config, LocalFolder, load_config
 from repolore.setup import (
     PLANS_PATTERN,
     RepoChange,
@@ -198,6 +198,19 @@ def test_replacing_a_config_keeps_what_setup_doesnt_ask_about(tmp_path: Path) ->
     kept = with_unasked_settings(Config(include=["new/*"]), path)
 
     assert kept == Config(include=["new/*"], local_folders=FOLDERS, checkout_depth=4, max_local_files=9)
+
+
+def test_branch_rules_survive_replacing_the_file(tmp_path: Path) -> None:
+    path = tmp_path / "repolore.toml"
+    rules = [
+        BranchRule(repo="me/*", patterns=["staging/*"]),
+        BranchRule(repo="org/app", patterns=["live/*", "release/*"]),
+    ]
+    write_config(path, Config(include=["old/*"], local_folders=FOLDERS, branches=rules))
+
+    write_config(path, with_unasked_settings(Config(include=["new/*"]), path))
+
+    assert load_config(path) == Config(include=["new/*"], local_folders=FOLDERS, branches=rules)
 
 
 def test_nothing_to_replace_changes_nothing(tmp_path: Path) -> None:
