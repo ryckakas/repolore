@@ -152,7 +152,9 @@ same way. See [MCP clients](https://github.com/ryckakas/repolore#mcp-clients) fo
    when no PR has it. A PR from one of these branches doesn't count, so a fix pushed to `staging/x` and released by a
    `staging/x` to `live/x` PR is still found. A release through a branch you haven't listed counts as that commit's
    PR, so list that branch too. A PR's commit cherry-picked onto another branch is indexed once, repeating the PR.
-   Removing a pattern or deleting a branch leaves its commits in the index until `repolore ingest --full`.
+   Removing a pattern or deleting a branch leaves its commits in the index until `repolore ingest --full`. Only
+   branches pushed to GitHub are read, not local ones. Name long-lived branches rather than using `*`, which stops
+   every PR from claiming its commits and indexes them all.
 
 2. Fetch and index:
 
