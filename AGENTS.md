@@ -48,7 +48,7 @@ uv run repolore session-start  # what the plugin's SessionStart hook runs: a bac
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
 uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
 uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
-uv run repolore ui          # a local web page with the status, doctor's checks, setup and search, until Ctrl-C;
+uv run repolore ui          # a local web page with the status, the MCP tools, what's indexed and the clients, until Ctrl-C;
                             # --no-browser only prints its address
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh
                             # (with no flags at all it first offers `ui` instead, default no);
@@ -273,20 +273,25 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   needs that cookie on every request and an `Origin` equal to `http://<Host>` on every POST, and
   `TrustedHostMiddleware` the Host `127.0.0.1`. A strict CSP allows no inline script or style. `Referrer-Policy` must
   stay `same-origin`: under `no-referrer`, browsers send `Origin: null` on a form POST. Doctor's checks run on a button
-  and not on page load, because checking Claude Code starts the shared server and so the model. `ui/setup_pages.py` has
-  the setup forms: GitHub and the repo list load as a fragment, since listing takes dozens of requests, and a form
-  comes back as a fragment too, so a save needs no second listing. Each repo row posts a hidden `shown` field, which is
-  how a save knows what was on the form. `setup.update_config` edits only the keys a form owns through `tomlkit`,
-  keeping comments, and checks the result still loads before replacing the file. Only saving the repos may create
-  `repolore.toml`, because a file with no `include` selects every repo. `ui/client_pages.py` lists the MCP clients
-  found here with a Register button for one without repolore. The form names a row of `clients.CLIENTS`, so a request
-  can't make the page run or write anything else, and the list leaves out the connection check for the same reason as
-  doctor's button. `ui/search_page.py` forwards a search through `relay.Relay`, importing the MCP client only then, so
-  the first search starts the shared server and waits for the model. It holds no client lock and a search doesn't
-  count as a session, so a server only the page uses exits 10 minutes after it started, and the next search starts
-  another. A hit links only to `https://github.com/`, since browsers refuse a `file://`
-  link from an `http` page, and its text goes through autoescaping like everything else: search hits are other
-  people's text in a page whose cookie can write the config.
+  and not on page load, because checking Claude Code starts the shared server and so the model. It has four pages, and
+  a page load never starts the shared server or the model. `ui/status_page.py` is the index with its passages per
+  source, the last refresh, the shared server's state from its files (the discovery file's `model_ready` is rewritten
+  once the server's preload finishes), Stop and Start through `relay`, imported only then, and the tail of its log.
+  `ui/source_pages.py` has the forms for what's indexed: GitHub and the repo list load as a fragment, since listing
+  takes dozens of requests, what the local settings match and each folder's status too, since they walk the disk, and
+  a form comes back as a fragment, so a save needs no second listing. Each repo row posts a hidden `shown` field, which
+  is how a save knows what was on the form, so the filter only hides rows. `setup.update_config` edits only the keys a
+  form owns through `tomlkit`, keeping comments, and checks the result still loads before replacing the file. Only
+  saving the repos may create `repolore.toml`, because a file with no `include` selects every repo, so a first run
+  opens on Sources. `ui/client_pages.py` lists the MCP clients found here with a Register button for one without
+  repolore. The form names a row of `clients.CLIENTS`, so a request can't make the page run or write anything else,
+  and the list leaves out the connection check for the same reason as doctor's button. `ui/tools_page.py` calls the
+  four MCP tools through `relay.Relay`, importing the MCP client only then, so the first call starts the shared server
+  and waits for the model. The route accepts only the names in its `TOOLS` table, which a test holds to what the server
+  serves. It holds no client lock and a call doesn't count as a session, so a server only the page uses exits 10
+  minutes after it started, and the next call starts another. A hit links only to `https://github.com/`, since browsers
+  refuse a `file://` link from an `http` page, and its text goes through autoescaping like everything else: search hits
+  are other people's text in a page whose cookie can write the config.
 - `setup.py` holds what `repolore setup` and the page's forms need besides prompts: parsing the repo pick (numbers, ranges, globs) and the
   local roots, and writing `repolore.toml`, which keeps the settings setup can't ask about when it replaces a file. The command reuses doctor's GitHub check and stops only when the token
   doesn't work. `clients.py` has one table of the clients it knows, `--clients` picking some by key: Claude Code and

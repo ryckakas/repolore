@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block main %}
+<section>
+  <h2>MCP clients on this machine</h2>
+  <p class="muted">Each one runs <code>repolore-mcp</code>, which joins the shared server or starts it.</p>
+  <div id="clients" data-load="/clients/list" aria-live="polite">Looking for MCP clients on this machine…</div>
+</section>
+<section>
+  <h2>Any other client</h2>
+  <p class="muted">Add repolore as a stdio server in its MCP config.</p>
+  <div class="copyable">
+<pre>{
+  "mcpServers": {
+    "repolore": { "command": "repolore-mcp" }
+  }
+}</pre>
+    <button type="button" class="small" data-copy>Copy</button>
+  </div>
+  <p class="hint">With another index, add <code>"args": ["--db", "work"]</code>.</p>
+</section>
+<section>
+  <h2>What clients are told</h2>
+  <p class="muted">The server's instructions, sent when a client connects, so its model knows when to use repolore.</p>
+  <p class="instructions">{{ instructions }}</p>
+</section>
+{% endblock %}

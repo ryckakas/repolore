@@ -7,13 +7,13 @@ from typing import IO
 
 import pytest
 
-from repolore import refresh
+from repolore import locks, refresh
+from repolore.locks import REPLACE_ATTEMPTS
 from repolore.processes import SpawnError
 from repolore.progress import Phase, Progress
 from repolore.refresh import (
     LOCK_FILE,
     LOG_FILE,
-    REPLACE_ATTEMPTS,
     REQUEST_FILE,
     STARTUP_SECONDS,
     STATUS_FILE,
@@ -232,7 +232,7 @@ class HeldOpen:
         self.refusals = 0
         self.attempts = 0
         self._replace = Path.replace
-        monkeypatch.setattr(refresh, "REPLACE_WAIT_SECONDS", 0)
+        monkeypatch.setattr(locks, "REPLACE_WAIT_SECONDS", 0)
         monkeypatch.setattr(Path, "replace", lambda partial, target: self(partial, target))
 
     def __call__(self, partial: Path, target: Path) -> Path:

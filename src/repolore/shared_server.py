@@ -5,6 +5,7 @@ import secrets
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 
 import anyio
 import uvicorn
@@ -99,11 +100,10 @@ async def _watch(
         await anyio.sleep(0.05)
     port = http.servers[0].sockets[0].getsockname()[1]
     started_at = datetime.now(UTC).isoformat(timespec="seconds")
-    write_discovery(
-        files, Discovery(pid=os.getpid(), port=port, token=token, version=__version__, started_at=started_at)
-    )
+    discovery = Discovery(pid=os.getpid(), port=port, token=token, version=__version__, started_at=started_at)
+    write_discovery(files, discovery)
     log.info("Serving %s on %s:%d for repolore %s.", files.db, HOST, port, __version__)
-    preload(paths.index_file(files.db), embedder_for)
+    preload(paths.index_file(files.db), embedder_for, partial(_record_model_ready, files, discovery))
     last_seen = time.monotonic()
     while True:
         await anyio.sleep(WATCH_SECONDS)
@@ -116,3 +116,10 @@ async def _watch(
             log.info("Stopping: no session for %g minutes.", idle_seconds / 60)
             break
     http.should_exit = True
+
+
+def _record_model_ready(files: ServerFiles, discovery: Discovery) -> None:
+    try:
+        write_discovery(files, discovery.model_copy(update={"model_ready": True}))
+    except OSError as error:
+        log.warning("Couldn't record that the model has loaded: %s", error)

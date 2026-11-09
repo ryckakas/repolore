@@ -1,0 +1,16 @@
+<div class="source-head">
+  <h3>{% if source.link %}<a href="{{ source.link }}" target="_blank" rel="noopener">{{ source.title }}</a>{% else %}{{ source.title }}{% endif %}</h3>
+  <p class="muted">{{ source.repo }} · {{ source.kind }}</p>
+  {% if not source.link %}<p class="muted"><code>{{ source.location }}</code></p>{% endif %}
+</div>
+<ol class="hits">
+  {% for passage in source.passages %}
+  <li>
+    <p class="muted">{{ passage.header }}</p>
+    <p class="hit-text">{{ passage.text }}</p>
+  </li>
+  {% endfor %}
+</ol>
+{% if source.next_start is not none %}
+<p class="hint">More passages follow. Read again with start {{ source.next_start }} to get them.</p>
+{% endif %}

@@ -1,0 +1,12 @@
+<div class="table-box">
+  <table>
+    <thead>
+      <tr><th scope="col">Source</th><th scope="col" class="number">Passages</th><th scope="col">Kinds</th></tr>
+    </thead>
+    <tbody>
+      {% for source in sources %}
+      <tr><td><code>{{ source.name }}</code></td><td class="number">{{ "{:,}".format(source.passages) }}</td><td class="muted">{{ source.kinds }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

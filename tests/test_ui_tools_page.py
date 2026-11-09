@@ -5,6 +5,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 from conftest import DocumentFactory, FakeEmbedder, SharedServer
 from mcp.client import Client
@@ -12,7 +13,7 @@ from mcp.server import MCPServer
 from mcp.types import CallToolRequestParams, CallToolResult
 from starlette.testclient import TestClient
 
-from repolore import relay
+from repolore import mcp_server, relay
 from repolore.chunking import chunk_document
 from repolore.documents import DocumentKind
 from repolore.mcp_server import create_server
@@ -21,7 +22,7 @@ from repolore.relay import Relay, ServerUnavailable
 from repolore.server_state import ServerFiles
 from repolore.store import connect, write_index
 from repolore.ui.app import create_app
-from repolore.ui.search_page import Hit
+from repolore.ui.tools_page import MAX_K, TOOLS, Hit, _elapsed
 
 TOKEN = "the-token"
 BASE = "http://127.0.0.1:1234"
@@ -36,7 +37,6 @@ class InProcessRelay:
         self._calls = calls
 
     async def call_tool(self, _: object, params: CallToolRequestParams) -> CallToolResult:
-        assert params.name == "search"
         self._calls.append(params.arguments or {})
         async with Client(self._server) as client:
             return await client.call_tool(params.name, params.arguments)
@@ -49,7 +49,7 @@ def browser_of(paths: AppPaths, db: str = "default") -> TestClient:
 
 
 def search(browser: TestClient, query: str, **filters: str) -> Any:
-    return browser.post("/search", data={"query": query, **filters}, headers=FROM_THE_PAGE)
+    return browser.post("/tools/search", data={"query": query, **filters}, headers=FROM_THE_PAGE)
 
 
 def serve_tools(
@@ -81,13 +81,13 @@ def paths(tmp_path: Path) -> AppPaths:
 def test_the_page_offers_the_filters_and_doesnt_search(paths: AppPaths, monkeypatch: pytest.MonkeyPatch) -> None:
     no_relay(monkeypatch)
 
-    html = browser_of(paths).get("/search").text
+    html = browser_of(paths).get("/tools").text
 
-    assert 'action="/search"' in html
+    assert 'action="/tools/search"' in html
     assert 'name="repo"' in html
     for kind in DocumentKind:
         assert f'<option value="{kind.value}">' in html
-    assert 'href="/search"' in html
+    assert 'href="/tools" aria-current="page"' in html
 
 
 def test_a_search_reaches_the_real_server_through_the_real_relay(
@@ -115,7 +115,7 @@ def test_hits_show_their_title_repo_kind_score_and_text(
     )
     assert "octo/repo · issue · score " in response.text
     assert "The solar battery reports power over Modbus TCP." in response.text
-    assert calls == [{"query": "solar battery Modbus"}]
+    assert calls == [{"query": "solar battery Modbus", "distinct": False}]
 
 
 @pytest.mark.parametrize(
@@ -140,7 +140,7 @@ def test_the_filters_narrow_the_hits(
 
     assert expected in html
     assert left_out not in html
-    assert calls == [{"query": "registry", **filters}]
+    assert calls == [{"query": "registry", "distinct": False, **filters}]
 
 
 def test_empty_filters_arent_sent(
@@ -150,7 +150,7 @@ def test_empty_filters_arent_sent(
 
     search(browser_of(data_paths), "  registry  ", kind="", repo="  ")
 
-    assert calls == [{"query": "registry"}]
+    assert calls == [{"query": "registry", "distinct": False}]
 
 
 def test_no_hits_says_so(
@@ -240,7 +240,7 @@ def test_an_empty_query_doesnt_search(paths: AppPaths, monkeypatch: pytest.Monke
 def test_no_query_field_doesnt_search(paths: AppPaths, monkeypatch: pytest.MonkeyPatch) -> None:
     no_relay(monkeypatch)
 
-    assert browser_of(paths).post("/search", data={}, headers=FROM_THE_PAGE).status_code == 400
+    assert browser_of(paths).post("/tools/search", data={}, headers=FROM_THE_PAGE).status_code == 400
 
 
 def test_html_in_a_hit_is_shown_as_text(
@@ -326,16 +326,254 @@ def test_a_search_the_page_didnt_make_is_refused(
 ) -> None:
     no_relay(monkeypatch)
 
-    assert browser_of(paths).post("/search", data={"query": "x"}, headers=headers).status_code == 403
+    assert browser_of(paths).post("/tools/search", data={"query": "x"}, headers=headers).status_code == 403
 
 
 def test_the_search_page_needs_the_cookie(paths: AppPaths) -> None:
     client = TestClient(create_app(paths, "default", TOKEN), base_url=BASE, follow_redirects=False)
 
-    assert client.get("/search").status_code == 403
+    assert client.get("/tools").status_code == 403
 
 
 def test_the_page_loads_no_mcp_client_until_a_search() -> None:
     code = "import sys, repolore.ui.app; sys.exit('mcp' in sys.modules or 'repolore.relay' in sys.modules)"
 
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+
+
+def run(browser: TestClient, tool: str, **fields: str) -> Any:
+    return browser.post(f"/tools/{tool}", data=fields, headers=FROM_THE_PAGE)
+
+
+def test_the_page_offers_every_tool_and_the_rest_of_the_search_options(
+    paths: AppPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    no_relay(monkeypatch)
+
+    html = browser_of(paths).get("/tools").text
+
+    for tool in TOOLS:
+        assert f'data-tool="{tool.name}"' in html
+        assert f'action="/tools/{tool.name}"' in html
+    for field in ("author", "k", "mode", "distinct", "url", "section", "start"):
+        assert f'name="{field}"' in html
+    assert '<option value="hybrid">' in html
+    assert f'max="{MAX_K}"' in html
+
+
+def test_the_tool_table_names_what_the_server_serves(paths: AppPaths, fake_embedder: FakeEmbedder) -> None:
+    async def served() -> list[str]:
+        async with Client(create_server(paths, "default", lambda _: fake_embedder)) as client:
+            return [tool.name for tool in (await client.list_tools()).tools]
+
+    assert sorted(anyio.run(served)) == sorted(tool.name for tool in TOOLS)
+
+
+def test_every_search_option_reaches_the_tool(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    response = run(
+        browser_of(data_paths), "search", query="registry", author="octocat", k="3", mode="keyword", distinct="on"
+    )
+
+    assert response.status_code == 200
+    assert calls == [{"query": "registry", "distinct": True, "author": "octocat", "mode": "keyword", "k": 3}]
+
+
+@pytest.mark.parametrize("k", ["0", str(MAX_K + 1), "-1", "two", "1.5", "9" * 5000])
+def test_a_k_out_of_range_doesnt_search(paths: AppPaths, monkeypatch: pytest.MonkeyPatch, k: str) -> None:
+    no_relay(monkeypatch)
+
+    response = run(browser_of(paths), "search", query="x", k=k)
+
+    assert response.status_code == 400
+    assert f"k must be a whole number from 1 to {MAX_K}." in response.text
+
+
+@pytest.mark.parametrize("k", ["1", str(MAX_K)])
+def test_the_ends_of_the_k_range_are_allowed(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch, k: str
+) -> None:
+    calls = serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    assert run(browser_of(data_paths), "search", query="registry", k=k).status_code == 200
+    assert calls[0]["k"] == int(k)
+
+
+def test_hits_offer_to_read_their_source(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    html = run(browser_of(data_paths), "search", query="solar battery Modbus").text
+
+    assert 'data-read="https://github.com/octo/repo/issues/3"' in html
+    assert 'data-view="passages"' in html
+    assert 'data-view="json"' in html
+
+
+def test_a_result_has_a_summary_and_its_json(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    html = run(browser_of(data_paths), "search", query="solar battery Modbus", k="1").text
+
+    assert 'class="meta">1 passage · ' in html
+    assert "&#34;query&#34;: &#34;solar battery Modbus&#34;" in html
+    assert "data-copy" in html
+
+
+def test_read_shows_the_source_passage_by_passage(
+    paths: AppPaths, fake_embedder: FakeEmbedder, make_document: DocumentFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index_of(paths, fake_embedder, make_document(1, "# One\n\nfirst part\n\n# Two\n\nsecond part"))
+    calls = serve_tools(monkeypatch, paths, fake_embedder)
+
+    response = run(browser_of(paths), "read", url="https://github.com/octo/repo/pull/1")
+
+    assert response.status_code == 200
+    assert '<a href="https://github.com/octo/repo/pull/1" target="_blank" rel="noopener">Change 1</a>' in response.text
+    assert "first part" in response.text
+    assert "second part" in response.text
+    assert "More passages follow" not in response.text
+    assert calls == [{"url": "https://github.com/octo/repo/pull/1"}]
+
+
+def test_read_says_when_more_passages_follow(
+    paths: AppPaths, fake_embedder: FakeEmbedder, make_document: DocumentFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    long = "x" * (mcp_server.READ_CHARS // 2)
+    body = "\n\n".join(f"# Part {number}\n\n{long}" for number in range(4))
+    index_of(paths, fake_embedder, make_document(1, body))
+    serve_tools(monkeypatch, paths, fake_embedder)
+
+    html = run(browser_of(paths), "read", url="https://github.com/octo/repo/pull/1").text
+
+    assert "More passages follow. Read again with start " in html
+
+
+def test_read_passes_its_section_and_start(
+    paths: AppPaths, fake_embedder: FakeEmbedder, make_document: DocumentFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    index_of(paths, fake_embedder, make_document(1, "# One\n\nfirst part\n\n# Two\n\nsecond part"))
+    calls = serve_tools(monkeypatch, paths, fake_embedder)
+
+    html = run(browser_of(paths), "read", url="https://github.com/octo/repo/pull/1", section="Two", start="0").text
+
+    assert "second part" in html
+    assert "first part" not in html
+    assert calls == [{"url": "https://github.com/octo/repo/pull/1", "section": "Two", "start": 0}]
+
+
+def test_read_of_a_local_document_shows_its_path_and_no_link(
+    paths: AppPaths,
+    tmp_path: Path,
+    fake_embedder: FakeEmbedder,
+    make_document: DocumentFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file = tmp_path / "plan.md"
+    index_of(paths, fake_embedder, make_document(1, "registry", kind=DocumentKind.LOCAL, url=file.as_uri()))
+    serve_tools(monkeypatch, paths, fake_embedder)
+
+    html = run(browser_of(paths), "read", url=file.as_uri()).text
+
+    assert '<a href="file:' not in html
+    assert f"<code>{file}</code>" in html
+
+
+@pytest.mark.parametrize("url", ["", "   "])
+def test_read_without_a_url_doesnt_call_the_tool(paths: AppPaths, monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    no_relay(monkeypatch)
+
+    response = run(browser_of(paths), "read", url=url)
+
+    assert response.status_code == 400
+    assert "Give the url of a search result." in response.text
+
+
+def test_a_negative_start_doesnt_call_the_tool(paths: AppPaths, monkeypatch: pytest.MonkeyPatch) -> None:
+    no_relay(monkeypatch)
+
+    response = run(browser_of(paths), "read", url="https://github.com/o/r/pull/1", start="-1")
+
+    assert response.status_code == 400
+    assert "start must be a whole number of 0 or more." in response.text
+
+
+def test_reading_something_not_indexed_is_reported(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    response = run(browser_of(data_paths), "read", url="https://github.com/no/such")
+
+    assert response.status_code == 502
+    assert "Nothing indexed has the url" in response.text
+
+
+@pytest.mark.parametrize("answer", [None, {}, {"title": "only"}])
+def test_a_read_answer_of_another_shape_is_reported(
+    paths: AppPaths, monkeypatch: pytest.MonkeyPatch, answer: Any
+) -> None:
+    monkeypatch.setattr(relay, "Relay", lambda _: AnsweringRelay(answer))
+
+    response = run(browser_of(paths), "read", url="https://github.com/o/r/pull/1")
+
+    assert response.status_code == 502
+    assert "unexpected form" in response.text
+
+
+def test_list_repos_answers_with_json_alone(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    response = run(browser_of(data_paths), "list_repos")
+
+    assert response.status_code == 200
+    assert "octo/repo" in response.text
+    assert 'data-view="passages"' not in response.text
+    assert '<div data-view-panel="json" class="copyable">' in response.text
+    assert calls == [{}]
+
+
+def test_the_refresh_tool_starts_a_real_refresh(
+    data_paths: AppPaths, index_file: Path, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[str] = []
+    monkeypatch.setattr(mcp_server, "start_refresh", lambda _, db: started.append(db) or True)
+    serve_tools(monkeypatch, data_paths, fake_embedder)
+
+    response = run(browser_of(data_paths), "refresh")
+
+    assert response.status_code == 200
+    assert "Refresh started in the background." in response.text
+    assert started == ["default"]
+
+
+@pytest.mark.parametrize("name", ["other", "search2", "__class__"])
+def test_only_a_tool_in_the_table_can_be_called(paths: AppPaths, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    no_relay(monkeypatch)
+
+    response = run(browser_of(paths), name)
+
+    assert response.status_code == 404
+    assert "There&#39;s no such tool." in response.text
+
+
+@pytest.mark.parametrize("name", [tool.name for tool in TOOLS])
+def test_a_tool_call_the_page_didnt_make_is_refused(
+    paths: AppPaths, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    no_relay(monkeypatch)
+
+    assert browser_of(paths).post(f"/tools/{name}", data={"query": "x", "url": "y"}).status_code == 403
+
+
+@pytest.mark.parametrize(("seconds", "text"), [(0.2124, "212 ms"), (0.9994, "999 ms"), (1.0, "1.0 s"), (3.46, "3.5 s")])
+def test_the_time_a_call_took_reads_in_a_sensible_unit(seconds: float, text: str) -> None:
+    assert _elapsed(seconds) == text

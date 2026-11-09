@@ -3,25 +3,29 @@
 </ul>
 {% if notice is defined %}{% include "_notice.html" %}{% endif %}
 {% if rows is none %}
-<p><a href="/setup">Check again</a></p>
+<p><a href="/sources">Check again</a></p>
 {% elif not rows %}
 <p class="muted">GitHub lists no repos for this account.</p>
 {% else %}
-<form method="post" action="/setup/repos" data-into="#repos-result" data-waiting="Saving…">
+<form method="post" action="/sources/repos" data-into="#repos-result" data-waiting="Saving…">
   {% if replaced %}
   <p class="notice">Saving replaces these entries in repolore.toml with the ticked names: {{ replaced | join(", ") }}</p>
   {% endif %}
-  <p class="muted">The first refresh embeds every picked repo on this machine, which takes a while, so start with a few.</p>
-  <label><input type="checkbox" name="every"{% if every %} checked{% endif %}> Every repo, now and later (ignores the ticks below)</label>
+  <p class="hint">The first refresh embeds every picked repo on this machine, which takes a while, so start with a few.</p>
+  <label class="tick"><input type="checkbox" name="every"{% if every %} checked{% endif %}> Every repo, now and later (ignores the ticks below)</label>
+  <input type="text" data-filter-repos aria-label="Filter repos" placeholder="Filter {{ rows | length }} repos" spellcheck="false">
   <ul class="repos">
     {% for row in rows %}
     <li>
-      <label><input type="checkbox" name="repo" value="{{ row.name }}"{% if row.ticked %} checked{% endif %}> {{ row.name }} <span class="muted">{{ row.scope }}</span></label>
+      <label><input type="checkbox" name="repo" value="{{ row.name }}"{% if row.ticked %} checked{% endif %}> <span class="repo-name">{{ row.name }}</span> <span class="muted">{{ row.scope }}</span></label>
       <input type="hidden" name="shown" value="{{ row.name }}">
     </li>
     {% endfor %}
   </ul>
-  <button type="submit">Save repos</button>
+  <div class="actions">
+    <button type="submit">Save repos</button>
+    <span class="hint" data-ticked>{% if every %}All{% else %}{{ rows | selectattr("ticked") | list | length }}{% endif %} ticked</span>
+  </div>
 </form>
 <div id="repos-result" class="result" aria-live="polite"></div>
 {% endif %}

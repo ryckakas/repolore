@@ -626,3 +626,23 @@ async def test_read_refuses_a_negative_start(index_file: Path, fake_embedder: Fa
         result = await client.call_tool("read", {"url": "https://github.com/octo/repo/pull/1", "start": -1})
 
     assert result.is_error
+
+
+def test_preload_says_when_the_model_is_ready(index_file: Path, fake_embedder: FakeEmbedder) -> None:
+    ready: list[int] = []
+
+    thread = preload(index_file, lambda _: fake_embedder, lambda: ready.append(fake_embedder.warm_ups))
+
+    assert thread is not None
+    thread.join(timeout=10)
+    assert ready == [1]
+
+
+def test_a_preload_that_fails_doesnt_say_the_model_is_ready(index_file: Path) -> None:
+    def embedder_for(_: str) -> FakeEmbedder:
+        raise UnknownModelError("built with another model")
+
+    thread = preload(index_file, embedder_for, lambda: pytest.fail("said it was ready"))
+
+    assert thread is not None
+    thread.join(timeout=10)

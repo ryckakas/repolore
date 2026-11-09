@@ -9,13 +9,14 @@ from repolore.doctor import Check
 from repolore.paths import AppPaths
 from repolore.refresh import REQUEST_FILE, STATUS_FILE, RefreshStatus
 from repolore.ui import app as ui_app
+from repolore.ui import status_page
 from repolore.ui.app import HEADERS, create_app, serve
 
 TOKEN = "the-token"
 BASE = "http://127.0.0.1:1234"
 FROM_THE_PAGE = {"Origin": BASE}
 COOKIE = "repolore_ui_1234"
-INDEX_LINE = "chunks from"
+INDEX_LINE = "passages from"
 
 
 def client_of(paths: AppPaths) -> TestClient:
@@ -41,7 +42,7 @@ def browser(anonymous: TestClient) -> TestClient:
 @pytest.fixture
 def refreshes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     started: list[str] = []
-    monkeypatch.setattr(ui_app, "start_refresh", lambda _, db: started.append(db) or True)
+    monkeypatch.setattr(status_page, "start_refresh", lambda _, db: started.append(db) or True)
     return started
 
 
@@ -63,13 +64,13 @@ def test_the_cookie_opens_the_page(browser: TestClient) -> None:
     assert "text/html" in response.headers["content-type"]
 
 
-def test_a_first_run_with_no_config_opens_on_setup(browser: TestClient, data_paths: AppPaths) -> None:
+def test_a_first_run_with_no_config_opens_on_sources(browser: TestClient, data_paths: AppPaths) -> None:
     data_paths.config_file.unlink()
 
     response = browser.get("/")
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/setup"
+    assert response.headers["location"] == "/sources"
 
 
 def test_the_token_works_for_the_whole_run(data_paths: AppPaths) -> None:
@@ -117,7 +118,7 @@ def test_another_host_is_refused(browser: TestClient, host: str) -> None:
 def test_a_post_that_the_page_didnt_make_is_refused(
     browser: TestClient, refreshes: list[str], monkeypatch: pytest.MonkeyPatch, path: str, headers: dict[str, str]
 ) -> None:
-    monkeypatch.setattr(ui_app, "diagnose", lambda *_: pytest.fail("the checks ran"))
+    monkeypatch.setattr(status_page, "diagnose", lambda *_: pytest.fail("the checks ran"))
 
     response = browser.post(path, headers=headers)
 
@@ -164,8 +165,8 @@ def test_the_status_page_sums_up_the_index_and_the_server(browser: TestClient) -
     html = browser.get("/").text
 
     assert INDEX_LINE in html
-    assert "shared server" in html
-    assert "not running; the first search starts it" in html
+    assert "MCP server" in html
+    assert "Not running. It starts when" in html
     assert "none yet" in html
 
 
@@ -213,7 +214,7 @@ def test_the_refresh_state_is_a_fragment(browser: TestClient, data_paths: AppPat
 
     html = browser.get("/refresh").text
 
-    assert html.startswith('<div id="refresh" data-running>')
+    assert html.startswith('<ul class="checks" id="refresh" data-running>')
     assert "<html" not in html
 
 
@@ -229,7 +230,7 @@ def test_a_refresh_that_cant_start_is_reported(browser: TestClient, monkeypatch:
     def fail(*_: Any) -> bool:
         raise OSError("no space left")
 
-    monkeypatch.setattr(ui_app, "start_refresh", fail)
+    monkeypatch.setattr(status_page, "start_refresh", fail)
 
     response = browser.post("/refresh", headers=FROM_THE_PAGE)
 
@@ -239,7 +240,7 @@ def test_a_refresh_that_cant_start_is_reported(browser: TestClient, monkeypatch:
 
 
 def run_checks(browser: TestClient, monkeypatch: pytest.MonkeyPatch, checks: list[Check]) -> str:
-    monkeypatch.setattr(ui_app, "diagnose", lambda *_: iter(checks))
+    monkeypatch.setattr(status_page, "diagnose", lambda *_: iter(checks))
     response = browser.post("/checks", headers=FROM_THE_PAGE)
     assert response.status_code == 200
     return response.text

@@ -7,6 +7,7 @@ from starlette.responses import Response
 
 from repolore.clients import CLIENTS, McpClient, RegistrationError, repolore_entries
 from repolore.doctor import CLIENT_ERRORS, Check, registration_check
+from repolore.instructions import INSTRUCTIONS
 from repolore.ui.rendering import render
 
 
@@ -20,6 +21,9 @@ class ClientRow:
 class ClientPages:
     def __init__(self, db: str) -> None:
         self._db = db
+
+    def page(self, request: Request) -> Response:
+        return render(request, self._db, "clients.html", instructions=INSTRUCTIONS)
 
     def listing(self, request: Request) -> Response:
         return self._fragment(request)
@@ -37,8 +41,15 @@ class ClientPages:
         return self._fragment(request, message=message)
 
     def _fragment(self, request: Request, status_code: int = 200, **context: Any) -> Response:
-        rows = [row for client in CLIENTS if (row := _row(client)) is not None]
-        return render(request, self._db, "_clients.html", status_code, rows=rows, **context)
+        rows: list[ClientRow] = []
+        missing: list[str] = []
+        for client in CLIENTS:
+            row = _row(client)
+            if row is None:
+                missing.append(client.name)
+            else:
+                rows.append(row)
+        return render(request, self._db, "_clients.html", status_code, rows=rows, missing=missing, **context)
 
 
 def _row(client: McpClient) -> ClientRow | None:

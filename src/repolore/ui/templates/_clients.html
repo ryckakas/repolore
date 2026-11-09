@@ -1,15 +1,26 @@
 {% if notice is defined %}{% include "_notice.html" %}{% endif %}
 {% if message is defined %}<p>{{ message }}</p>{% endif %}
 {% if rows %}
-<ul class="checks">
-  {% for row in rows %}{% with check = row.check %}{% include "_check.html" %}{% endwith %}{% endfor %}
+<ul class="clients">
+  {% for row in rows %}
+  <li class="{% if row.check.warning %}warning{% elif row.check.ok %}pass{% else %}fail{% endif %}">
+    <span class="mark">{% if row.check.warning %}!{% elif row.check.ok %}✓{% else %}✗{% endif %}</span>
+    <div class="client">
+      <strong>{{ row.check.name }}</strong>: {{ row.check.detail }}
+      {% if row.check.fix %}<p class="fix">Fix: {{ row.check.fix }}</p>{% endif %}
+    </div>
+    {% if row.can_register %}
+    <form method="post" action="/clients/register" data-into="#clients" data-waiting="Registering…">
+      <input type="hidden" name="client" value="{{ row.key }}">
+      <button type="submit" aria-label="Register with {{ row.check.name }}">Register</button>
+    </form>
+    {% endif %}
+  </li>
+  {% endfor %}
 </ul>
-{% for row in rows if row.can_register %}
-<form method="post" action="/setup/clients" data-into="#clients" data-waiting="Registering…">
-  <input type="hidden" name="client" value="{{ row.key }}">
-  <button type="submit">Register with {{ row.check.name }}</button>
-</form>
-{% endfor %}
 {% else %}
 <p class="muted">No MCP client was found on this machine.</p>
+{% endif %}
+{% if missing %}
+<p class="hint">Not found: {{ missing | join(", ") }}. Install one and reload this page.</p>
 {% endif %}

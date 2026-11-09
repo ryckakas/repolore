@@ -1,0 +1,18 @@
+<div class="title-row">
+  <h2>Result <span class="meta">{{ meta }}</span></h2>
+  {% if hits is defined or source is defined %}
+  <div role="group" aria-label="View" class="picker small">
+    <button type="button" data-view="passages" aria-pressed="true">Passages</button>
+    <button type="button" data-view="json" aria-pressed="false">JSON</button>
+  </div>
+  {% endif %}
+</div>
+{% if hits is defined %}
+<div data-view-panel="passages">{% include "_hits.html" %}</div>
+{% elif source is defined %}
+<div data-view-panel="passages">{% include "_source.html" %}</div>
+{% endif %}
+<div data-view-panel="json" class="copyable"{% if hits is defined or source is defined %} hidden{% endif %}>
+  <pre>{{ json }}</pre>
+  <button type="button" class="small" data-copy>Copy</button>
+</div>
