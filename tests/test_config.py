@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from repolore.config import Config, LocalFolder, load_config
+from repolore.config import BranchRule, Config, LocalFolder, load_config
 
 
 def write(tmp_path: Path, content: str) -> Path:
@@ -91,6 +91,45 @@ def test_depth_zero_and_a_limit_of_one_are_the_smallest_allowed() -> None:
 def test_a_depth_or_limit_below_the_smallest_is_rejected(setting: dict[str, int]) -> None:
     with pytest.raises(ValidationError):
         Config.model_validate(setting)
+
+
+def test_branch_rules_are_loaded_from_tables(tmp_path: Path) -> None:
+    config = load_config(write(tmp_path, '[[branches]]\nrepo = "octo/*"\npatterns = ["staging/*"]\n'))
+
+    assert config.branches == [BranchRule(repo="octo/*", patterns=["staging/*"])]
+
+
+def test_without_a_rule_a_repo_has_no_branch_patterns() -> None:
+    assert Config().branch_patterns("octo/repo") == ()
+
+
+def test_only_a_matching_rule_gives_a_repo_its_patterns() -> None:
+    config = Config(branches=[BranchRule(repo="octo/repo", patterns=["staging/*"])])
+
+    assert config.branch_patterns("octo/repo") == ("staging/*",)
+    assert config.branch_patterns("octo/other") == ()
+
+
+def test_several_matching_rules_add_up_without_repeats() -> None:
+    config = Config(
+        branches=[
+            BranchRule(repo="octo/*", patterns=["staging/*", "live/*"]),
+            BranchRule(repo="octo/repo", patterns=["live/*", "release/*"]),
+        ]
+    )
+
+    assert config.branch_patterns("octo/repo") == ("staging/*", "live/*", "release/*")
+
+
+def test_a_rules_repo_glob_ignores_case_like_include() -> None:
+    config = Config(branches=[BranchRule(repo="Octo/*", patterns=["staging/*"])])
+
+    assert config.branch_patterns("octo/repo") == ("staging/*",)
+
+
+def test_a_branch_rule_needs_at_least_one_pattern() -> None:
+    with pytest.raises(ValidationError):
+        BranchRule(repo="octo/repo", patterns=[])
 
 
 def test_broken_toml_is_rejected(tmp_path: Path) -> None:

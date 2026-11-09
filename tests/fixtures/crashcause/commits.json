@@ -6,7 +6,15 @@
   "messageBody": "…-6b5e4c0ca6\n\nBump the kubernetes group with 4 updates",
   "committedDate": "2026-10-24T16:39:00Z",
   "parents": {
-   "totalCount": 2
+   "totalCount": 2,
+   "nodes": [
+    {
+     "oid": "90cde8114122f84b3ab07c9c0bbd026c851e1b0c"
+    },
+    {
+     "oid": "05a39507999fa4fd6d095746246a0bfb37c32f03"
+    }
+   ]
   },
   "author": {
    "name": "Ricardas Kauneckas",
@@ -14,28 +22,7 @@
     "login": "ryckakas"
    }
   },
-  "associatedPullRequests": {
-   "totalCount": 1
-  }
- },
- {
-  "oid": "d4551b73a50e7f9415d821a588925c68beed4d01",
-  "url": "https://github.com/ryckakas/crashcause/commit/d4551b73a50e7f9415d821a588925c68beed4d01",
-  "messageHeadline": "Restructure the README around a concise visible core",
-  "messageBody": "The README had grown into a full reference manual read top to bottom.\nThe reference tables (18 cause codes, inspect/watch flags, the RBAC\npermission table, values examples, the JSON shape) are now collapsible\ndetails blocks, and the sinks and AI-layer deep-dives move to\ndocs/sinks.md and docs/ai-layer.md with short summaries left in place.\nThe safety-critical AI facts stay visible in the README summary: off by\ndefault, fail-closed namespace allowlist, redaction is best-effort.\n\nNo content was deleted, only collapsed or moved; all relative links and\nanchors verified.\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>",
-  "committedDate": "2026-08-03T17:12:51Z",
-  "parents": {
-   "totalCount": 1
-  },
-  "author": {
-   "name": "ryckakas",
-   "user": {
-    "login": "ryckakas"
-   }
-  },
-  "associatedPullRequests": {
-   "totalCount": 1
-  }
+  "authoredDate": "2026-10-24T16:39:00Z"
  },
  {
   "oid": "69531a3aa08bf8d47f1428261efc3038537127b6",
@@ -44,7 +31,12 @@
   "messageBody": "…stones 2+4 core)\n\n- engine: 17 rules, priority order per spec, 96% coverage\n- collect: client-go collectors, log rate limiting, owner resolution, 91.7% coverage\n- ai: redactor + anthropic/openai/ollama HTTP clients, redact-before-send, 95.7% coverage\n- sinks: stdout JSON, prometheus counter w/ series lifecycle, loki push w/ backpressure\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>",
   "committedDate": "2026-08-02T18:40:08Z",
   "parents": {
-   "totalCount": 1
+   "totalCount": 1,
+   "nodes": [
+    {
+     "oid": "340265124f847beb2e1987a512328fadd41c90d4"
+    }
+   ]
   },
   "author": {
    "name": "ryckakas",
@@ -52,8 +44,6 @@
     "login": "ryckakas"
    }
   },
-  "associatedPullRequests": {
-   "totalCount": 0
-  }
+  "authoredDate": "2026-08-02T18:40:08Z"
  }
 ]

@@ -46,6 +46,13 @@ class LocalFolder(BaseModel):
         return f"{FOLDER_OWNER}/{self.name}"
 
 
+class BranchRule(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    repo: str
+    patterns: Annotated[list[str], Field(min_length=1)]
+
+
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -56,6 +63,7 @@ class Config(BaseModel):
     local_patterns: list[LocalPattern] = []
     local_folders: list[LocalFolder] = []
     max_local_files: int = Field(default=2000, ge=1)
+    branches: list[BranchRule] = []
 
     @model_validator(mode="after")
     def _folder_names_are_unique(self) -> Self:
@@ -71,6 +79,11 @@ class Config(BaseModel):
             return True
         included = not self.include or _matches_any(repo, self.include)
         return included and not _matches_any(repo, self.exclude)
+
+    def branch_patterns(self, repo: str) -> tuple[str, ...]:
+        """The globs naming the branches, besides the default one, whose commits are read for a repo."""
+        matching = (rule.patterns for rule in self.branches if _matches_any(repo, [rule.repo]))
+        return tuple(dict.fromkeys(pattern for patterns in matching for pattern in patterns))
 
 
 def _matches_any(repo: str, patterns: list[str]) -> bool:

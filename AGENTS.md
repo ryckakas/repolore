@@ -120,8 +120,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   holding the raw API cache and the DB files, and `--data-dir` overrides it. **The repo never
   contains corpus data.** It contains private code, so it stays out of git.
 - `config.py` loads `repolore.toml`: optional `include` / `exclude` globs over `owner/name`, and `local_roots`,
-  `checkout_depth`, `local_patterns`, `[[local_folders]]` and `max_local_files` for local documents. Without a file, every discovered
-  repo is in and nothing local is.
+  `checkout_depth`, `local_patterns`, `[[local_folders]]` and `max_local_files` for local documents, and `[[branches]]`,
+  each a `repo` glob with the `patterns` of the branches whose commits are read besides the default one. Without a file,
+  every discovered repo is in, nothing local is, and only default branches are read.
 - `discovery.py` decides what to ingest. Repos the viewer owns or reads as a collaborator or org member (forks
   skipped) are fetched whole. Other people's repos found by an `involves:<login>` search are fetched only for the
   viewer's PRs and issues; `repositoriesContributedTo` is not used, because it misses PRs the viewer only commented
@@ -142,10 +143,13 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   gitignored. Raw responses are cached as `<data-dir>/raw/<owner>/<repo>/*.json`, so
   chunking and embedding never need the network.
 - `ingest.py` syncs the raw cache. A cached repo is fetched incrementally: PRs and issues newest-updated first down
-  to the newest cached `updatedAt`, commits `since` the newest cached one, markdown files only when their blob SHA
-  changed. Files gone from the tree drop out, and a repo no longer discovered or selected is deleted from the cache,
-  both logged, so `build` removes them from the index. Deleted PRs and issues, and default-branch history that was
-  rewritten or merged with older commit dates, need `ingest --full`.
+  to the newest cached `updatedAt`, markdown files only when their blob SHA changed. Commits have no date watermark: a
+  repo's branch tips (the default branch, plus those its `[[branches]]` patterns match, from a `refs` listing only when
+  it has patterns) are walked from each tip not cached until every parent is known, so an unchanged tip costs no request
+  and shared history is read once. Files gone from the tree drop out, and a repo no longer discovered or selected is
+  deleted from the cache, both logged, so `build` removes them from the index. Deleted PRs and issues, rewritten history,
+  and the commits of a removed pattern or deleted branch need `ingest --full`. The fields of cached nodes aren't
+  migrated: a cache `documents.py` can't validate stops `refresh` and `build` with one line asking for `ingest --full`.
 - `documents.py` normalizes into `Document`s. Bots are filtered by GraphQL `author.__typename`,
   not by a login list. Deleted accounts become `ghost`. Review threads a bot started are dropped unless the index
   is built with `--bot-reviews`. Local files are private `local` documents with `file://` URLs. `cached_documents` leaves a local file to the
@@ -153,9 +157,12 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   also reaches stays under its repo. A
   commit is indexed only
   when no PR has it: its oid is neither a PR's merge commit nor one of its first 100 commits, whatever the PR's state.
-  The history query doesn't ask GitHub per commit, which made its pages up to 3x slower; commits cached while it did
-  keep GitHub's answer. A rebase merge gives the commits new oids, so all but the last commit of a rebase-merged PR
-  are indexed as commits too.
+  The history query doesn't ask GitHub per commit, which made its pages up to 3x slower. In a repo with `[[branches]]`,
+  a same-repo PR from the default branch or a branch its patterns match is a promotion, which claims only its merge
+  commit, because its commits were pushed straight to a branch that is read; `info.json` records the patterns, since
+  `build` doesn't read the config. Commits with the same author name, authored date and headline are one document, the
+  first cached, because a cherry-pick or rebase keeps those three under a new oid. A rebase merge gives the commits new
+  oids, so all but the last commit of a rebase-merged PR are indexed as commits too.
 - `chunking.py` splits each document's markdown at headings (markdown-it-py, top-level blocks only, so
   a code fence or table stays one block), keeps each section whole up to a limit, and prefixes each chunk with a
   header like `owner/repo · PR #17 · <title> · <section>`. A nested section's header names its parent headings

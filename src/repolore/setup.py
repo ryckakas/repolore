@@ -18,6 +18,7 @@ ALL = "all"
 PLANS_PATTERN = ".plans/**/*.md"
 NUMBERS = re.compile(r"(\d+)(?:-(\d+))?")
 FOLDERS_KEY = "local_folders"
+TABLE_KEYS = (FOLDERS_KEY, "branches")
 
 
 class SelectionError(ValueError):
@@ -109,6 +110,7 @@ def with_unasked_settings(config: Config, replaced_file: Path) -> Config:
             "local_folders": old.local_folders,
             "checkout_depth": old.checkout_depth,
             "max_local_files": old.max_local_files,
+            "branches": old.branches,
         }
     )
 
@@ -116,8 +118,8 @@ def with_unasked_settings(config: Config, replaced_file: Path) -> Config:
 def config_text(config: Config) -> str:
     """repolore.toml for the config, with only the keys it sets; JSON's strings and arrays are valid TOML."""
     keys = config.model_dump(mode="json", exclude_defaults=True)
-    folders = keys.pop("local_folders", [])
-    return _toml_lines(keys) + "".join(f"\n[[local_folders]]\n{_toml_lines(folder)}" for folder in folders)
+    tables = "".join(f"\n[[{key}]]\n{_toml_lines(entry)}" for key in TABLE_KEYS for entry in keys.pop(key, []))
+    return _toml_lines(keys) + tables
 
 
 def _toml_lines(keys: dict[str, Any]) -> str:

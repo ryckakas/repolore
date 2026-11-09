@@ -1,3 +1,4 @@
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -7,7 +8,7 @@ import pytest
 from repolore import ingest as ingest_module
 from repolore.discovery import Discovery, RepoSource, Scope
 from repolore.documents import DocumentKind
-from repolore.ingest import SCOPE_FILE, cached_documents, ingest
+from repolore.ingest import SCOPE_FILE, OutdatedCacheError, cached_documents, ingest
 from repolore.progress import Phase, Progress
 from repolore.sources.github import GitHubClient, RawRepo
 from repolore.sources.local_docs import LOCAL_FILE, LocalFile, LocalFiles, TooManyFilesError, save_local_files
@@ -20,12 +21,14 @@ CLIENT = GitHubClient.connect("unused")
 class FakeFetch:
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.repos: list[tuple[str, RawRepo | None]] = []
+        self.branches: list[tuple[str, ...]] = []
         self.contributions: list[tuple[str, str]] = []
         monkeypatch.setattr(ingest_module, "fetch_repo", self.fetch_repo)
         monkeypatch.setattr(ingest_module, "fetch_contributions", self.fetch_contributions)
 
-    def fetch_repo(self, _: GitHubClient, repo: str, cached: RawRepo | None) -> RawRepo:
+    def fetch_repo(self, _: GitHubClient, repo: str, cached: RawRepo | None, branches: tuple[str, ...]) -> RawRepo:
         self.repos.append((repo, cached))
+        self.branches.append(branches)
         return RawRepo.load(FIXTURE)
 
     def fetch_contributions(self, _: GitHubClient, repo: str, login: str) -> RawRepo:
@@ -72,6 +75,42 @@ def test_owned_repo_is_fetched_whole_then_incrementally(tmp_path: Path, monkeypa
     assert len(first) == 7
     assert [cached for _, cached in fake.repos] == [None, RawRepo.load(FIXTURE), None]
     assert RawRepo.load(tmp_path / REPO) == RawRepo.load(FIXTURE)
+
+
+def test_a_repos_branch_patterns_reach_the_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeFetch(monkeypatch)
+
+    ingest(discovery(RepoSource(REPO, Scope.OWNED, branches=("staging/*",))), tmp_path, CLIENT)
+
+    assert fake.branches == [("staging/*",)]
+
+
+def outdated_cache(directory: Path) -> None:
+    shutil.copytree(FIXTURE, directory)
+    pulls = json.loads((directory / "pulls.json").read_text(encoding="utf-8"))
+    del pulls[0]["headRefName"]
+    (directory / "pulls.json").write_text(json.dumps(pulls), encoding="utf-8")
+
+
+def test_a_cache_from_an_older_version_names_the_repo_and_the_fix(tmp_path: Path) -> None:
+    outdated_cache(tmp_path / REPO)
+
+    with pytest.raises(OutdatedCacheError) as caught:
+        cached_documents(tmp_path)
+
+    assert str(caught.value) == f"The cached data for {REPO} is from an older repolore; run `repolore ingest --full`."
+
+
+def test_a_full_ingest_replaces_a_cache_from_an_older_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeFetch(monkeypatch)
+    (tmp_path / REPO).parent.mkdir(parents=True)
+    outdated_cache(tmp_path / REPO)
+    (tmp_path / REPO / SCOPE_FILE).write_text(Scope.OWNED, encoding="utf-8")
+
+    documents = ingest(discovery(RepoSource(REPO, Scope.OWNED)), tmp_path, CLIENT, full=True)
+
+    assert len(documents) == 7
+    assert fake.repos == [(REPO, None)]
 
 
 def test_repo_that_was_only_contributed_to_is_fetched_whole_once_owned(

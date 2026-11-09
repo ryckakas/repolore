@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from repolore import discovery as discovery_module
-from repolore.config import Config, LocalFolder
+from repolore.config import BranchRule, Config, LocalFolder
 from repolore.discovery import RepoSource, Scope, discover
 from repolore.sources.github import GitHubClient, GitHubError, ViewerOrg, ViewerRepo
 from repolore.sources.local_docs import LocalFiles
@@ -49,6 +49,19 @@ def test_config_globs_split_included_from_excluded(found: Path) -> None:
 
     assert [source.name for source in result.included] == ["octocat/repo"]
     assert [source.name for source in result.excluded] == ["octo-org/service", "other/project", "someone/clone"]
+
+
+def test_an_included_repo_gets_the_branch_patterns_of_its_rule(found: Path) -> None:
+    config = Config(branches=[BranchRule(repo="octo-org/*", patterns=["staging/*"])])
+
+    result = discover(CLIENT, config)
+
+    assert {source.name: source.branches for source in result.included} == {
+        "octo-org/service": ("staging/*",),
+        "octocat/repo": (),
+        "other/project": (),
+        "someone/clone": (),
+    }
 
 
 def test_nothing_found_is_an_empty_discovery(monkeypatch: pytest.MonkeyPatch) -> None:

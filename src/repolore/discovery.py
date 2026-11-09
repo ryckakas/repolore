@@ -33,6 +33,7 @@ class RepoSource:
     name: str
     scope: Scope
     local: LocalFiles | None = None
+    branches: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,11 @@ def discover(client: GitHubClient, config: Config) -> Discovery:
     sources = sorted(found.values(), key=lambda source: source.name.lower())
     return Discovery(
         login=login,
-        included=[source for source in sources if config.selects(source.name)],
+        included=[
+            replace(source, branches=config.branch_patterns(source.name))
+            for source in sources
+            if config.selects(source.name)
+        ],
         excluded=[source for source in sources if not config.selects(source.name)],
     )
 

@@ -2,6 +2,7 @@ import re
 from collections.abc import Iterable, Iterator
 from datetime import datetime
 from enum import StrEnum
+from fnmatch import fnmatchcase
 from textwrap import indent
 
 from pydantic import BaseModel, ConfigDict
@@ -68,7 +69,9 @@ def documents_from(raw: RawRepo, include_bot_reviews: bool = False) -> list[Docu
         *_pull_documents(repo, pulls),
         *_review_documents(repo, pulls, include_bot_reviews),
         *_issue_documents(repo, (Issue.model_validate(issue) for issue in raw.issues)),
-        *_commit_documents(repo, (Commit.model_validate(commit) for commit in raw.commits), _pull_commit_oids(pulls)),
+        *_commit_documents(
+            repo, (Commit.model_validate(commit) for commit in raw.commits), _pull_commit_oids(repo, pulls)
+        ),
         *_doc_documents(repo, (DocFile.model_validate(doc) for doc in raw.docs)),
     ]
 
@@ -163,20 +166,30 @@ def _issue_documents(repo: RepoInfo, issues: Iterable[Issue]) -> Iterator[Docume
         )
 
 
-def _pull_commit_oids(pulls: Iterable[PullRequest]) -> set[str]:
-    """The oids of every PR's merge commit and commits, whatever the PR's state, as GitHub links commits to PRs."""
+def _pull_commit_oids(repo: RepoInfo, pulls: Iterable[PullRequest]) -> set[str]:
+    """The oids of every PR's merge commit and commits, whatever the PR's state, as GitHub links commits to PRs.
+
+    A promotion PR keeps its merge commit only: what it carries was pushed straight to a branch that is indexed.
+    """
     oids: set[str] = set()
     for pull in pulls:
-        oids.update(node.commit.oid for node in pull.commits.nodes if node.commit.oid)
+        if not _is_promotion(repo, pull):
+            oids.update(node.commit.oid for node in pull.commits.nodes)
         if pull.merge_commit:
             oids.add(pull.merge_commit.oid)
     return oids
 
 
+def _is_promotion(repo: RepoInfo, pull: PullRequest) -> bool:
+    if not repo.branch_patterns or pull.is_cross_repository:
+        return False
+    default_branch = repo.default_branch_ref.name if repo.default_branch_ref else None
+    head = pull.head_ref_name
+    return head == default_branch or any(fnmatchcase(head, pattern) for pattern in repo.branch_patterns)
+
+
 def _commit_documents(repo: RepoInfo, commits: Iterable[Commit], pull_commit_oids: set[str]) -> Iterator[Document]:
-    for commit in commits:
-        if commit.parents.total_count > 1 or _came_from_a_pull(commit, pull_commit_oids) or _is_bot_commit(commit):
-            continue
+    for commit in _without_copies(_own_commits(commits, pull_commit_oids)):
         headline, body = _rejoin_headline(commit.message_headline, commit.message_body)
         body, ai_assisted = _strip_claude_trailers(body)
         yield Document(
@@ -192,11 +205,18 @@ def _commit_documents(repo: RepoInfo, commits: Iterable[Commit], pull_commit_oid
         )
 
 
-def _came_from_a_pull(commit: Commit, pull_commit_oids: set[str]) -> bool:
-    # Commits cached while history still asked GitHub keep its answer; their PRs were cached without commit oids.
-    if commit.associated_pull_requests is not None:
-        return commit.associated_pull_requests.total_count > 0
-    return commit.oid in pull_commit_oids
+def _own_commits(commits: Iterable[Commit], pull_commit_oids: set[str]) -> Iterator[Commit]:
+    for commit in commits:
+        if commit.parents.total_count <= 1 and commit.oid not in pull_commit_oids and not _is_bot_commit(commit):
+            yield commit
+
+
+def _without_copies(commits: Iterable[Commit]) -> Iterable[Commit]:
+    # A cherry-pick or rebase gets a new oid but keeps the author and the date it was written, on every branch it lands.
+    first: dict[tuple[str, datetime, str], Commit] = {}
+    for commit in commits:
+        first.setdefault((commit.author.name, commit.authored_date, commit.message_headline), commit)
+    return first.values()
 
 
 def _is_bot_commit(commit: Commit) -> bool:

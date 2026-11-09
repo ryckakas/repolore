@@ -40,7 +40,7 @@ from repolore.evals.harness import (
 from repolore.evals.questions import QuestionKind, QuestionSet, load_questions
 from repolore.evals.runs import previous_run, run_record, save_run
 from repolore.indexing import BuildSettings, build_index
-from repolore.ingest import cached_documents
+from repolore.ingest import OutdatedCacheError, cached_documents
 from repolore.ingest import ingest as ingest_repos
 from repolore.paths import AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report, ignore
@@ -178,7 +178,7 @@ def ingest(
 
 def _ingest(paths: AppPaths, full: bool, report: Report = ignore) -> list[Document]:
     config = _config_or_exit(paths.config_file)
-    with _exit_on(TooManyFilesError), _github() as client:
+    with _exit_on(TooManyFilesError, OutdatedCacheError), _github() as client:
         report(Progress(phase=Phase.DISCOVER))
         return ingest_repos(discover(client, config), paths.raw_dir, client, full, report)
 
@@ -204,7 +204,8 @@ def _github() -> Generator[GitHubClient]:
 
 
 def _cached_documents(paths: AppPaths, include_bot_reviews: bool = False) -> list[Document]:
-    documents = cached_documents(paths.raw_dir, include_bot_reviews)
+    with _exit_on(OutdatedCacheError):
+        documents = cached_documents(paths.raw_dir, include_bot_reviews)
     if not documents:
         _fail(f"Nothing cached in {paths.raw_dir}; run `repolore ingest` first.")
     return documents

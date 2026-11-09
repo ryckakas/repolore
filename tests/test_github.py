@@ -50,8 +50,12 @@ def pull(number: int, files: int = 0, updated: str | None = None) -> Json:
     } | ({"updatedAt": updated} if updated else {})
 
 
-def commit(oid: str, committed: str) -> Json:
-    return {"oid": oid, "committedDate": committed}
+def commit(oid: str, *parents: str) -> Json:
+    return {"oid": oid, "parents": {"totalCount": len(parents), "nodes": [{"oid": parent} for parent in parents]}}
+
+
+def branches(tips: dict[str, str], after: str | None = None) -> Json:
+    return page([{"name": name, "target": {"oid": oid}} for name, oid in tips.items()], after)
 
 
 def tree_entry(path: str, sha: str, mode: str = "100644", kind: str = "blob") -> Json:
@@ -71,13 +75,17 @@ DEFAULT_TREE = [
 class FakeGitHub:
     """Serves each GraphQL operation from a list of pages, and the tree and blobs over REST."""
 
-    def __init__(self, branch: str | None = "main", truncated: bool = False, **pages: list[Json]) -> None:
-        self.info = {**INFO, "defaultBranchRef": {"name": branch} if branch else None}
-        self.pages = {
-            "RepoPullRequests": [page([pull(1)])],
-            "RepoIssues": [page([{"number": 7}])],
-            "DefaultBranchHistory": [page([{"oid": "abc"}])],
-        } | pages
+    def __init__(
+        self,
+        branch: str | None = "main",
+        truncated: bool = False,
+        tip: str = "abc",
+        histories: dict[str, list[Json]] | None = None,
+        **pages: list[Json],
+    ) -> None:
+        self.info = {**INFO, "defaultBranchRef": {"name": branch, "target": {"oid": tip}} if branch else None}
+        self.pages = {"RepoPullRequests": [page([pull(1)])], "RepoIssues": [page([{"number": 7}])]} | pages
+        self.histories = {tip: [page([commit(tip)])]} if histories is None else histories
         self.tree = DEFAULT_TREE
         self.truncated = truncated
         self.requests: list[httpx.Request] = []
@@ -103,7 +111,8 @@ class FakeGitHub:
         if operation == "RepoInfo":
             return {"repository": self.info}
         index = int(variables["after"] or 0)
-        connection = self.pages[operation][index]
+        pages = self.histories[variables["tip"]] if operation == "CommitHistory" else self.pages[operation]
+        connection = pages[index]
         if connection["pageInfo"]["hasNextPage"]:
             connection = {**connection, "pageInfo": {"hasNextPage": True, "endCursor": str(index + 1)}}
         return _wrap(operation, connection)
@@ -115,8 +124,10 @@ def _wrap(operation: str, connection: Json) -> Json:
             return {"repository": {"pullRequests": connection}}
         case "RepoIssues":
             return {"repository": {"issues": connection}}
-        case "DefaultBranchHistory":
-            return {"repository": {"defaultBranchRef": {"target": {"history": connection}}}}
+        case "RepoBranches":
+            return {"repository": {"refs": connection}}
+        case "CommitHistory":
+            return {"repository": {"object": {"history": connection}}}
         case "ViewerRepositories":
             return {"viewer": {"login": "octocat", "repositories": connection}}
         case "ViewerOrganizations":
@@ -138,12 +149,14 @@ def test_fetch_repo_collects_every_source() -> None:
     assert raw.info["nameWithOwner"] == "octo/repo"
     assert [p["number"] for p in raw.pulls] == [1]
     assert raw.issues == [{"number": 7}]
-    assert raw.commits == [{"oid": "abc"}]
+    assert raw.commits == [commit("abc")]
     assert raw.docs == [
         {"path": "README.md", "sha": "readme", "text": "# readme ✓"},
         {"path": "docs/Design.MD", "sha": "design", "text": "# design ✓"},
     ]
-    assert fake.variables("DefaultBranchHistory") == [{"owner": "octo", "name": "repo", "after": None, "since": None}]
+    assert fake.variables("CommitHistory") == [{"owner": "octo", "name": "repo", "tip": "abc", "after": None}]
+    assert fake.variables("RepoBranches") == []
+    assert raw.info["branchPatterns"] == []
 
 
 def test_pull_requests_are_paginated() -> None:
@@ -160,7 +173,7 @@ def test_cached_repo_fetches_only_what_changed_since() -> None:
         info=INFO,
         pulls=[pull(1, updated="2026-01-01T00:00:00Z"), pull(2, updated="2026-02-01T00:00:00Z")],
         issues=[{"number": 7, "updatedAt": "2026-01-15T00:00:00Z", "title": "old"}],
-        commits=[commit("aaa", "2026-01-01T00:00:00Z"), commit("bbb", "2026-02-01T00:00:00Z")],
+        commits=[commit("aaa"), commit("bbb", "aaa")],
         docs=[],
     )
     newest_first = [
@@ -171,7 +184,8 @@ def test_cached_repo_fetches_only_what_changed_since() -> None:
     fake = FakeGitHub(
         RepoPullRequests=[page(newest_first, after="next"), page([pull(0, updated="2025-01-01T00:00:00Z")])],
         RepoIssues=[page([{"number": 7, "updatedAt": "2026-03-01T00:00:00Z", "title": "edited"}])],
-        DefaultBranchHistory=[page([commit("ccc", "2026-03-01T00:00:00Z"), commit("bbb", "2026-02-01T00:00:00Z")])],
+        tip="ccc",
+        histories={"ccc": [page([commit("ccc", "bbb"), commit("bbb", "aaa")], after="next"), page([commit("aaa")])]},
     )
 
     raw = fetch_repo(client_for(fake.handle), "octo/repo", cached)
@@ -180,28 +194,100 @@ def test_cached_repo_fetches_only_what_changed_since() -> None:
     assert len(fake.variables("RepoPullRequests")) == 1
     assert raw.issues == [{"number": 7, "updatedAt": "2026-03-01T00:00:00Z", "title": "edited"}]
     assert [c["oid"] for c in raw.commits] == ["aaa", "bbb", "ccc"]
-    assert fake.variables("DefaultBranchHistory")[0]["since"] == "2026-02-01T00:00:00Z"
+    assert len(fake.variables("CommitHistory")) == 1
 
 
-def test_a_cached_commit_fetched_again_keeps_its_cached_node() -> None:
-    boundary = commit("bbb", "2026-02-01T00:00:00Z") | {"associatedPullRequests": {"totalCount": 1}}
-    cached = RawRepo(info=INFO, pulls=[], issues=[], commits=[boundary], docs=[])
-    fake = FakeGitHub(DefaultBranchHistory=[page([commit("bbb", "2026-02-01T00:00:00Z")])])
-
-    raw = fetch_repo(client_for(fake.handle), "octo/repo", cached)
-
-    assert raw.commits == [boundary]
+def cached_commits(*commits: Json) -> RawRepo:
+    return RawRepo(info=INFO, pulls=[], issues=[], commits=list(commits), docs=[])
 
 
-def test_cache_from_before_incremental_fetching_is_fetched_again() -> None:
-    cached = RawRepo(info=INFO, pulls=[pull(9)], issues=[], commits=[{"oid": "old"}], docs=[])
+def test_an_unchanged_tip_asks_for_no_history() -> None:
     fake = FakeGitHub()
 
-    raw = fetch_repo(client_for(fake.handle), "octo/repo", cached)
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", cached_commits(commit("abc")))
 
-    assert [p["number"] for p in raw.pulls] == [1]
-    assert raw.commits == [{"oid": "abc"}]
-    assert fake.variables("DefaultBranchHistory")[0]["since"] is None
+    assert raw.commits == [commit("abc")]
+    assert fake.variables("CommitHistory") == []
+
+
+def test_a_commit_returned_again_keeps_its_cached_node() -> None:
+    boundary = commit("bbb") | {"messageBody": "as cached"}
+    fake = FakeGitHub(tip="ccc", histories={"ccc": [page([commit("ccc", "bbb"), commit("bbb")])]})
+
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", cached_commits(boundary))
+
+    assert raw.commits == [boundary, commit("ccc", "bbb")]
+
+
+def test_a_merge_of_an_old_commit_is_followed_past_a_page_of_known_commits() -> None:
+    history = [
+        page([commit("merge", "known", "old"), commit("known", "root")], after="next"),
+        page([commit("root")], after="next"),
+        page([commit("old")]),
+    ]
+    fake = FakeGitHub(tip="merge", histories={"merge": history})
+
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", cached_commits(commit("root"), commit("known", "root")))
+
+    assert [c["oid"] for c in raw.commits] == ["root", "known", "merge", "old"]
+    assert len(fake.variables("CommitHistory")) == 3
+
+
+def test_branches_add_up_and_shared_history_is_read_once() -> None:
+    fake = FakeGitHub(
+        tip="main-2",
+        RepoBranches=[branches({"staging/a": "s-1", "live/a": "main-2", "feature/x": "f-1"})],
+        histories={
+            "main-2": [page([commit("main-2", "root"), commit("root")])],
+            "s-1": [page([commit("s-1", "root")], after="next"), page([commit("root")])],
+        },
+    )
+
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", branch_patterns=("staging/*", "live/*"))
+
+    assert [c["oid"] for c in raw.commits] == ["main-2", "root", "s-1"]
+    assert [v["tip"] for v in fake.variables("CommitHistory")] == ["main-2", "s-1"]
+    assert raw.info["branchPatterns"] == ["staging/*", "live/*"]
+
+
+def test_branch_names_are_matched_case_sensitively_and_across_slashes() -> None:
+    tips = {"staging/a/b": "nested", "Staging/c": "upper"}
+    fake = FakeGitHub(
+        tip="main",
+        RepoBranches=[branches(tips)],
+        histories={"main": [page([commit("main")])], "nested": [page([commit("nested")])]},
+    )
+
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", branch_patterns=("staging/*",))
+
+    assert [c["oid"] for c in raw.commits] == ["main", "nested"]
+
+
+def test_every_page_of_branches_is_read() -> None:
+    fake = FakeGitHub(
+        tip="main",
+        RepoBranches=[branches({"staging/a": "s-a"}, after="next"), branches({"staging/b": "s-b"})],
+        histories={"main": [page([commit("main")])], "s-a": [page([commit("s-a")])], "s-b": [page([commit("s-b")])]},
+    )
+
+    raw = fetch_repo(client_for(fake.handle), "octo/repo", branch_patterns=("staging/*",))
+
+    assert [c["oid"] for c in raw.commits] == ["main", "s-a", "s-b"]
+
+
+def test_a_pattern_matching_no_branch_warns_and_the_default_branch_is_still_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = FakeGitHub(RepoBranches=[branches({"main": "abc"})])
+
+    with caplog.at_level(logging.INFO):
+        raw = fetch_repo(client_for(fake.handle), "octo/repo", branch_patterns=("staging/*",))
+
+    assert raw.commits == [commit("abc")]
+    assert ("octo/repo: no branch matches staging/*", logging.WARNING) in [
+        (record.message, record.levelno) for record in caplog.records
+    ]
+    assert "octo/repo: reading the commits of 0 matching branches" in caplog.text
 
 
 def test_docs_are_synced_by_blob_sha(caplog: pytest.LogCaptureFixture) -> None:

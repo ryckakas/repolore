@@ -51,7 +51,7 @@ class CommitMessage(GitHubModel):
 
 
 class PullCommitMessage(CommitMessage):
-    oid: str | None = None
+    oid: str
 
 
 class PullRequestCommit(GitHubModel):
@@ -73,7 +73,9 @@ class PullRequest(GitHubModel):
     url: str
     state: str
     created_at: datetime
-    merge_commit: CommitId | None = None
+    merge_commit: CommitId | None
+    head_ref_name: str
+    is_cross_repository: bool
     author: Actor | None
     files: Nodes[ChangedFile]
     commits: Nodes[PullRequestCommit]
@@ -105,10 +107,10 @@ class GitActor(GitHubModel):
 class Commit(CommitMessage):
     oid: str
     url: str
+    authored_date: datetime
     committed_date: datetime
     parents: Count
     author: GitActor
-    associated_pull_requests: Count | None = None
 
 
 class Branch(GitHubModel):
@@ -120,6 +122,7 @@ class RepoInfo(GitHubModel):
     url: str
     is_private: bool
     default_branch_ref: Branch | None
+    branch_patterns: list[str] = []
 
 
 class DocFile(GitHubModel):
