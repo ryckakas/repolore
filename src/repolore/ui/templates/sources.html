@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block main %}
+{% if config_error is defined %}
+<p class="notice" role="alert">{{ config_file }} can't be read, so nothing here can save until it's fixed: {{ config_error }}</p>
+{% else %}
+<p class="muted lead">What goes into the index. Saved in <code>{{ config_file }}</code>; changes apply at the next refresh.</p>
+<section>
+  <h2>GitHub repos</h2>
+  <div id="repos" data-load="/sources/repos" aria-live="polite">Asking GitHub for your repos, which can take a minute…</div>
+</section>
+<section>
+  <h2>Documents in your checkouts</h2>
+  <p class="muted">Markdown next to your code that is never pushed, such as plans. Found by repo, so it is searched with that repo.</p>
+  <form id="local-form" method="post" action="/sources/local" data-into="#local-matches" data-waiting="Saving…">
+    <label for="roots">Folders that hold your checkouts, one per line, absolute or starting with ~</label>
+    <textarea id="roots" name="roots" rows="2" spellcheck="false">{{ roots }}</textarea>
+    <label for="patterns">Documents inside each checkout, one glob per line, such as {{ example_pattern }}</label>
+    <textarea id="patterns" name="patterns" rows="3" spellcheck="false">{{ patterns }}</textarea>
+  </form>
+  <div id="local-matches" class="result" data-load="/sources/matches" aria-live="polite"></div>
+  <div class="actions">
+    <button type="submit" form="local-form">Save documents</button>
+  </div>
+</section>
+<section>
+  <h2>Local folders</h2>
+  <p class="muted">Markdown that belongs to no repo, such as notes. Always indexed, searched as <code>local/name</code>.</p>
+  <div id="folders" data-load="/sources/folders" aria-live="polite">Looking in your folders…</div>
+</section>
+{% endif %}
+{% endblock %}

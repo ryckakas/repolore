@@ -10,7 +10,7 @@ from pathlib import Path
 from filelock import Timeout
 from pydantic import BaseModel, Field, ValidationError
 
-from repolore.locks import hold, is_locked
+from repolore.locks import hold, is_locked, replace_when_free
 from repolore.processes import SAFE_PATH, spawn_detached
 from repolore.progress import Phase, Progress, Report
 
@@ -22,8 +22,6 @@ REQUEST_FILE = "refresh.requested"
 STARTUP_SECONDS = 120
 LOG_TAIL_LINES = 5
 PROGRESS_SECONDS = 2.0
-REPLACE_ATTEMPTS = 20
-REPLACE_WAIT_SECONDS = 0.05
 
 log = logging.getLogger(__name__)
 
@@ -150,14 +148,7 @@ class _Recorder:
 def _save(data_dir: Path, status: RefreshStatus) -> None:
     partial = data_dir / f"{STATUS_FILE}.tmp"
     partial.write_text(status.model_dump_json(exclude={"running", "log_tail"}), encoding="utf-8")
-    # Windows refuses to replace a file another process has open, which a reader polling the status does for a moment.
-    for _ in range(REPLACE_ATTEMPTS - 1):
-        try:
-            partial.replace(data_dir / STATUS_FILE)
-            return
-        except PermissionError:
-            time.sleep(REPLACE_WAIT_SECONDS)
-    partial.replace(data_dir / STATUS_FILE)
+    replace_when_free(partial, data_dir / STATUS_FILE)
 
 
 def _now() -> str:

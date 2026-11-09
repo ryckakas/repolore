@@ -7,7 +7,7 @@ from pathlib import Path
 from filelock import Timeout
 from pydantic import BaseModel, ValidationError
 
-from repolore.locks import hold, is_locked
+from repolore.locks import hold, is_locked, replace_when_free
 
 HOST = "127.0.0.1"
 
@@ -18,6 +18,7 @@ class Discovery(BaseModel):
     token: str
     version: str
     started_at: str
+    model_ready: bool = False
 
     @property
     def url(self) -> str:
@@ -74,7 +75,7 @@ def write_discovery(files: ServerFiles, discovery: Discovery) -> None:
     partial.unlink(missing_ok=True)
     with os.fdopen(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as file:
         file.write(discovery.model_dump_json())
-    partial.replace(files.discovery)
+    replace_when_free(partial, files.discovery)
 
 
 def request_stop(files: ServerFiles) -> None:

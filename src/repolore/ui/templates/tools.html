@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block main %}
+<section>
+  <div role="group" aria-label="Tool" class="picker">
+    {% for tool in tools %}
+    <button type="button" data-tool="{{ tool.name }}" aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ tool.name }}</button>
+    {% endfor %}
+  </div>
+  {% for tool in tools %}
+  <div data-tool-panel="{{ tool.name }}"{% if not loop.first %} hidden{% endif %}>
+    <p class="muted tool-description">{{ tool.description }}</p>
+    <form method="post" action="/tools/{{ tool.name }}" data-into="#result" data-waiting="Running {{ tool.name }}…">
+      {% include "_tool_" ~ tool.name ~ ".html" %}
+      <button type="submit">{{ tool.run_label }}</button>
+    </form>
+  </div>
+  {% endfor %}
+  <p class="hint">The first call starts the shared server and loads the model, which can take a minute.</p>
+</section>
+<section id="result" aria-live="polite"></section>
+{% endblock %}

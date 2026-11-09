@@ -635,7 +635,7 @@ def test_checkouts_report_their_files(tmp_path: Path) -> None:
 
     checks = local_checks(tmp_path, Config(local_roots=[root], local_patterns=[PLANS]))
 
-    assert checks == [Check("local checkouts", True, "2 files in 2 checkouts")]
+    assert checks == [Check("local checkouts", True, "2 files in 2 checkouts: octo/one, octo/two")]
 
 
 def test_one_checkout_with_one_file_is_singular(tmp_path: Path) -> None:
@@ -643,7 +643,7 @@ def test_one_checkout_with_one_file_is_singular(tmp_path: Path) -> None:
 
     checks = local_checks(tmp_path, Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS]))
 
-    assert checks[0].detail == "1 file in 1 checkout"
+    assert checks[0].detail == "1 file in 1 checkout: octo/repo"
 
 
 def test_roots_without_patterns_warn_with_the_line_to_add(tmp_path: Path) -> None:
@@ -668,7 +668,7 @@ def test_a_pattern_no_checkout_matches_warns_and_names_it(tmp_path: Path) -> Non
     check = local_checks(tmp_path, config)[0]
 
     assert (check.ok, check.warning) == (True, True)
-    assert check.detail == "1 file in 1 checkout; no selected GitHub checkout matches docs/adr/*.md"
+    assert check.detail == "1 file in 1 checkout: octo/repo; no selected GitHub checkout matches docs/adr/*.md"
 
 
 def test_a_pattern_only_some_checkouts_match_doesnt_warn(tmp_path: Path) -> None:
@@ -679,7 +679,7 @@ def test_a_pattern_only_some_checkouts_match_doesnt_warn(tmp_path: Path) -> None
 
     checks = local_checks(tmp_path, Config(local_roots=[tmp_path / "code"], local_patterns=[PLANS, "docs/*.md"]))
 
-    assert checks == [Check("local checkouts", True, "3 files in 2 checkouts")]
+    assert checks == [Check("local checkouts", True, "3 files in 2 checkouts: octo/one, octo/two")]
 
 
 def test_no_checkouts_at_all_warns_about_every_pattern(tmp_path: Path) -> None:
@@ -711,7 +711,7 @@ def test_a_checkout_left_out_by_the_globs_isnt_counted_or_limited(tmp_path: Path
 
     config = Config(include=["octo/kept"], local_roots=[tmp_path / "code"], local_patterns=[PLANS], max_local_files=1)
 
-    assert local_checks(tmp_path, config) == [Check("local checkouts", True, "1 file in 1 checkout")]
+    assert local_checks(tmp_path, config) == [Check("local checkouts", True, "1 file in 1 checkout: octo/kept")]
 
 
 def test_exactly_the_limit_passes(tmp_path: Path) -> None:

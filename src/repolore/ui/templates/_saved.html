@@ -1,9 +1,11 @@
-<p>{{ message }}</p>
-{% if checks %}{% include "_checks.html" %}{% endif %}
-{% if running %}
-<p class="muted">A refresh is running, so this applies to the next one.</p>
-{% elif saved %}
-<form method="post" action="/refresh">
-  <button type="submit">Refresh now</button>
-</form>
-{% endif %}
+<div class="saved">
+  <p>{{ message }}</p>
+  {% if checks %}{% include "_checks.html" %}{% endif %}
+  {% if running %}
+  <p class="muted">A refresh is running, so this applies to the next one.</p>
+  {% elif saved %}
+  <form method="post" action="/refresh">
+    <button type="submit">Refresh now</button>
+  </form>
+  {% endif %}
+</div>

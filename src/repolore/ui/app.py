@@ -4,7 +4,6 @@ import socket
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
 
 import uvicorn
 from starlette.applications import Starlette
@@ -17,14 +16,12 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp
 
-from repolore.doctor import Check, diagnose, index_check, refresh_check, server_check
 from repolore.paths import AppPaths
-from repolore.refresh import refresh_status, start_refresh
-from repolore.server_state import HOST, ServerFiles
+from repolore.server_state import HOST
 from repolore.ui.client_pages import ClientPages
-from repolore.ui.rendering import render
-from repolore.ui.search_page import SearchPage
-from repolore.ui.setup_pages import SetupPages
+from repolore.ui.source_pages import SourcePages
+from repolore.ui.status_page import StatusPage
+from repolore.ui.tools_page import ToolsPage
 
 HERE = Path(__file__).parent
 TOKEN_PARAMETER = "token"
@@ -88,60 +85,32 @@ def _cookie_name(request: Request) -> str:
     return f"repolore_ui_{request.url.port}"
 
 
-class Pages:
-    def __init__(self, paths: AppPaths, db: str) -> None:
-        self._paths = paths
-        self._db = db
-
-    def status(self, request: Request) -> Response:
-        if not self._paths.config_file.exists():
-            return RedirectResponse("/setup", status_code=303)
-        return self._status_page(request)
-
-    def refresh_state(self, request: Request) -> Response:
-        return render(request, self._db, "_refresh.html", **self._refresh())
-
-    def refresh(self, request: Request) -> Response:
-        try:
-            start_refresh(self._paths.data_dir, self._db)
-        except OSError as error:
-            return self._status_page(request, notice=f"Couldn't start a refresh: {error}", status_code=500)
-        return RedirectResponse("/", status_code=303)
-
-    def checks(self, request: Request) -> Response:
-        return render(request, self._db, "_checks.html", checks=list(diagnose(self._paths, self._db)))
-
-    def _status_page(self, request: Request, notice: str | None = None, status_code: int = 200) -> Response:
-        files = ServerFiles(self._paths.data_dir, self._db)
-        checks: list[Check] = [index_check(self._paths.index_file(self._db)), server_check(files)]
-        return render(request, self._db, "status.html", status_code, checks=checks, notice=notice, **self._refresh())
-
-    def _refresh(self) -> dict[str, Any]:
-        data_dir = self._paths.data_dir
-        return {"refresh": refresh_check(data_dir), "running": refresh_status(data_dir).running}
-
-
 def create_app(paths: AppPaths, db: str, token: str) -> Starlette:
-    pages = Pages(paths, db)
-    setup = SetupPages(paths, db)
+    status = StatusPage(paths, db)
+    tools = ToolsPage(paths, db)
+    sources = SourcePages(paths, db)
     clients = ClientPages(db)
-    search = SearchPage(paths, db)
     return Starlette(
         routes=[
-            Route("/", pages.status),
-            Route("/refresh", pages.refresh_state),
-            Route("/refresh", pages.refresh, methods=["POST"]),
-            Route("/checks", pages.checks, methods=["POST"]),
-            Route("/search", search.page),
-            Route("/search", search.search, methods=["POST"]),
-            Route("/setup", setup.page),
-            Route("/setup/repos", setup.repos),
-            Route("/setup/repos", setup.save_repos, methods=["POST"]),
-            Route("/setup/local", setup.save_local, methods=["POST"]),
-            Route("/setup/folders", setup.add_folder, methods=["POST"]),
-            Route("/setup/folders/remove", setup.remove_folder, methods=["POST"]),
-            Route("/setup/clients", clients.listing),
-            Route("/setup/clients", clients.register, methods=["POST"]),
+            Route("/", status.page),
+            Route("/refresh", status.refresh_state),
+            Route("/refresh", status.refresh, methods=["POST"]),
+            Route("/checks", status.checks, methods=["POST"]),
+            Route("/server/stop", status.stop_server, methods=["POST"]),
+            Route("/server/start", status.start_server, methods=["POST"]),
+            Route("/tools", tools.page),
+            Route("/tools/{name}", tools.run, methods=["POST"]),
+            Route("/sources", sources.page),
+            Route("/sources/repos", sources.repos),
+            Route("/sources/repos", sources.save_repos, methods=["POST"]),
+            Route("/sources/matches", sources.matches),
+            Route("/sources/local", sources.save_local, methods=["POST"]),
+            Route("/sources/folders", sources.folders),
+            Route("/sources/folders", sources.add_folder, methods=["POST"]),
+            Route("/sources/folders/remove", sources.remove_folder, methods=["POST"]),
+            Route("/clients", clients.page),
+            Route("/clients/list", clients.listing),
+            Route("/clients/register", clients.register, methods=["POST"]),
             Mount("/static", StaticFiles(directory=HERE / "static")),
         ],
         middleware=[

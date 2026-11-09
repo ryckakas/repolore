@@ -6,6 +6,7 @@
     <p class="muted">{{ hit.repo }} · {{ hit.kind }}{% if hit.section %} · {{ hit.section }}{% endif %} · score {{ "%.3f" | format(hit.score) }}</p>
     {% if not hit.link %}<p class="muted"><code>{{ hit.location }}</code></p>{% endif %}
     <p class="hit-text">{{ hit.text }}</p>
+    <button type="button" class="small" data-read="{{ hit.url }}">Read all</button>
   </li>
   {% endfor %}
 </ol>

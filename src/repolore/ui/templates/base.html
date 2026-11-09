@@ -12,7 +12,11 @@
   <header>
     <h1>repolore</h1>
     <p class="muted">{{ version }} · index {{ db }}</p>
-    <nav><a href="/">Status</a> <a href="/search">Search</a> <a href="/setup">Setup</a></nav>
+    <nav>
+      {% for path, label in [("/", "Status"), ("/tools", "Tools"), ("/sources", "Sources"), ("/clients", "Clients")] %}
+      <a href="{{ path }}"{% if request.url.path == path %} aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
   </header>
   <main>
     {% block main %}{% endblock %}

@@ -157,10 +157,14 @@ def local_documents_checks(config_file: Path) -> Iterator[Check]:
         config = load_config(config_file)
     except CONFIG_ERRORS:
         return
+    yield from checkout_checks(config)
+    for folder in config.local_folders:
+        yield folder_check(folder, config.max_local_files)
+
+
+def checkout_checks(config: Config) -> Iterator[Check]:
     if config.local_roots or config.local_patterns:
         yield _checkouts_check(config)
-    for folder in config.local_folders:
-        yield _folder_check(folder, config.max_local_files)
 
 
 def _checkouts_check(config: Config) -> Check:
@@ -173,11 +177,13 @@ def _checkouts_check(config: Config) -> Check:
     # A missing root is config_check's to report, and looking in it would only log that again.
     existing = [root for root in config.local_roots if os.path.isdir(root.expanduser())]
     found = find_checkouts(config.model_copy(update={"local_roots": existing}))
-    checkouts = [files for repo, files in found.items() if config.selects(repo)]
+    selected = {repo: files for repo, files in found.items() if config.selects(repo)}
+    checkouts = list(selected.values())
     counts = [len(files.matches()) for files in checkouts]
     if over := [files.root for files, count in zip(checkouts, counts, strict=True) if count > files.limit]:
         return Check(name, False, f"more than {config.max_local_files} files in {over[0]}", LIMIT_FIX)
-    detail = f"{_count(sum(counts), 'file')} in {_count(len(checkouts), 'checkout')}"
+    repos = f": {', '.join(sorted(selected, key=str.lower))}" if selected else ""
+    detail = f"{_count(sum(counts), 'file')} in {_count(len(checkouts), 'checkout')}{repos}"
     if unmatched := _unmatched_patterns(config.local_patterns, checkouts):
         return Check(
             name,
@@ -197,7 +203,7 @@ def _unmatched_patterns(patterns: list[str], checkouts: list[LocalFiles]) -> lis
     ]
 
 
-def _folder_check(folder: LocalFolder, limit: int) -> Check:
+def folder_check(folder: LocalFolder, limit: int) -> Check:
     files = folder_files(folder, limit)
     if files is None:
         return Check(folder.repo, False, f"not found: {folder.path}", "fix its path in repolore.toml")

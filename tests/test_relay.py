@@ -52,7 +52,7 @@ def _never_start(_: ServerFiles) -> None:
 def test_a_running_server_of_this_version_is_used(shared_server: SharedServer) -> None:
     running = shared_server.start()
 
-    assert find_or_start(shared_server.files, start=_never_start) == running
+    assert find_or_start(shared_server.files, start=_never_start).token == running.token
 
 
 def test_without_a_server_one_is_started_and_awaited(shared_server: SharedServer) -> None:
@@ -60,7 +60,7 @@ def test_without_a_server_one_is_started_and_awaited(shared_server: SharedServer
 
     found = find_or_start(shared_server.files, start=lambda _: started.append(shared_server.start()))
 
-    assert started == [found]
+    assert [server.token for server in started] == [found.token]
 
 
 def test_a_server_of_another_version_is_replaced(
@@ -258,7 +258,7 @@ def test_a_server_asked_to_stop_is_not_used_and_a_new_one_starts_after_it(shared
     found = find_or_start(shared_server.files, start=lambda _: started.append(shared_server.start()))
 
     exiting.join()
-    assert started == [found]
+    assert [server.token for server in started] == [found.token]
     assert found != stopping
 
 
@@ -271,7 +271,7 @@ def test_a_server_that_exits_before_serving_is_replaced(shared_server: SharedSer
     found = find_or_start(shared_server.files, start=lambda _: started.append(shared_server.start()))
 
     dying.join()
-    assert started == [found]
+    assert [server.token for server in started] == [found.token]
 
 
 @pytest.mark.parametrize(

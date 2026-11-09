@@ -15,7 +15,7 @@ from repolore import __version__
 from repolore import shared_server as shared_server_module
 from repolore.locks import hold
 from repolore.paths import AppPaths
-from repolore.server_state import Discovery, is_running, read_discovery, registered
+from repolore.server_state import Discovery, ServerFiles, is_running, read_discovery, registered
 from repolore.shared_server import StaticTokenVerifier
 
 INITIALIZE = {
@@ -165,7 +165,9 @@ def test_a_second_server_gives_up_while_one_runs(
     second.join()
 
     assert second.outcome == [False]
-    assert read_discovery(shared_server.files) == found
+    current = read_discovery(shared_server.files)
+    assert current is not None
+    assert current.token == found.token
 
 
 def test_the_token_check_compares_the_whole_token() -> None:
@@ -173,3 +175,29 @@ def test_the_token_check_compares_the_whole_token() -> None:
 
     assert anyio.run(verifier.verify_token, "secret") is not None
     assert anyio.run(verifier.verify_token, "secre") is None
+
+
+def test_the_address_file_says_when_the_model_has_loaded(shared_server: SharedServer) -> None:
+    found = shared_server.start()
+    deadline = time.monotonic() + 10
+    current = read_discovery(shared_server.files)
+
+    while (current is None or not current.model_ready) and time.monotonic() < deadline:
+        time.sleep(0.02)
+        current = read_discovery(shared_server.files)
+
+    assert current == found.model_copy(update={"model_ready": True})
+
+
+def test_failing_to_record_the_model_is_logged_and_the_server_goes_on(
+    data_paths: AppPaths, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def denied(*_: object) -> None:
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(shared_server_module, "write_discovery", denied)
+    found = Discovery(pid=1, port=1, token="t", version="1", started_at="2026-01-01T00:00:00+00:00")
+
+    shared_server_module._record_model_ready(ServerFiles(data_paths.data_dir, "default"), found)
+
+    assert "Couldn't record that the model has loaded: Access is denied" in caplog.text

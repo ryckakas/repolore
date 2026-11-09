@@ -9,9 +9,9 @@ from starlette.datastructures import FormData
 from starlette.requests import Request
 from starlette.responses import Response
 
-from repolore.config import FOLDER_OWNER, Config, load_config
+from repolore.config import FOLDER_OWNER, Config, LocalFolder, load_config
 from repolore.discovery import discover
-from repolore.doctor import CONFIG_ERRORS, Check, github_access, local_documents_checks
+from repolore.doctor import CONFIG_ERRORS, Check, checkout_checks, folder_check, github_access
 from repolore.paths import AppPaths
 from repolore.refresh import refresh_status
 from repolore.setup import (
@@ -41,6 +41,12 @@ class RepoRow:
 
 
 @dataclass(frozen=True)
+class FolderRow:
+    folder: LocalFolder
+    check: Check
+
+
+@dataclass(frozen=True)
 class FolderDraft:
     """What the add-a-folder form holds, so a refused save doesn't lose what was typed."""
 
@@ -49,7 +55,7 @@ class FolderDraft:
     patterns: str = ""
 
 
-class SetupPages:
+class SourcePages:
     def __init__(self, paths: AppPaths, db: str) -> None:
         self._paths = paths
         self._db = db
@@ -58,17 +64,21 @@ class SetupPages:
         try:
             config = load_config(self._paths.config_file)
         except CONFIG_ERRORS as error:
-            return self._render(request, "setup.html", config_error=str(error), config_file=self._paths.config_file)
+            return self._render(request, "sources.html", config_error=str(error), config_file=self._paths.config_file)
         return self._render(
             request,
-            "setup.html",
+            "sources.html",
             config_file=self._paths.config_file,
             roots="\n".join(str(root) for root in config.local_roots),
             patterns="\n".join(config.local_patterns),
             example_pattern=PLANS_PATTERN,
-            folders=config.local_folders,
-            draft=FolderDraft(),
         )
+
+    def matches(self, request: Request) -> Response:
+        return self._render(request, "_checks.html", checks=self._checkout_checks())
+
+    def folders(self, request: Request) -> Response:
+        return self._folders(request)
 
     def repos(self, request: Request) -> Response:
         github, access = github_access(GitHubClient.connect)
@@ -133,16 +143,14 @@ class SetupPages:
             save_local_settings(self._paths.config_file, roots, patterns)
         except SAVE_ERRORS as error:
             return self._render(request, "_notice.html", 400, notice=str(error))
-        checks = list(local_documents_checks(self._paths.config_file))
-        return self._saved(request, "Saved.", saved=True, checks=checks)
+        return self._saved(request, "Saved.", saved=True, checks=self._checkout_checks())
 
     def _add_folder(self, request: Request, draft: FolderDraft) -> Response:
         try:
             add_local_folder(self._paths.config_file, draft.name, draft.path, _lines(draft.patterns))
         except SAVE_ERRORS as error:
             return self._folders(request, 400, draft, notice=str(error))
-        checks = list(local_documents_checks(self._paths.config_file))
-        return self._changed_folders(request, f"Added {FOLDER_OWNER}/{draft.name}.", checks)
+        return self._changed_folders(request, f"Added {FOLDER_OWNER}/{draft.name}.")
 
     def _remove_folder(self, request: Request, name: str) -> Response:
         try:
@@ -150,22 +158,31 @@ class SetupPages:
         except SAVE_ERRORS as error:
             return self._folders(request, 400, notice=str(error))
         message = f"Removed {FOLDER_OWNER}/{name}. It leaves the index and its cached data at the next refresh."
-        return self._changed_folders(request, message, [])
+        return self._changed_folders(request, message)
 
-    def _changed_folders(self, request: Request, message: str, checks: list[Check]) -> Response:
+    def _changed_folders(self, request: Request, message: str) -> Response:
         running = refresh_status(self._paths.data_dir).running
-        return self._folders(request, message=message, saved=True, checks=checks, running=running)
+        return self._folders(request, message=message, saved=True, running=running)
 
     def _folders(
         self, request: Request, status_code: int = 200, draft: FolderDraft | None = None, **context: Any
     ) -> Response:
-        try:
-            folders = load_config(self._paths.config_file).local_folders
-        except (OSError, *CONFIG_ERRORS):
-            folders = []
         return self._render(
-            request, "_folders.html", status_code, folders=folders, draft=draft or FolderDraft(), **context
+            request, "_folders.html", status_code, rows=self._folder_rows(), draft=draft or FolderDraft(), **context
         )
+
+    def _folder_rows(self) -> list[FolderRow]:
+        try:
+            config = load_config(self._paths.config_file)
+        except (OSError, *CONFIG_ERRORS):
+            return []
+        return [FolderRow(folder, folder_check(folder, config.max_local_files)) for folder in config.local_folders]
+
+    def _checkout_checks(self) -> list[Check]:
+        try:
+            return list(checkout_checks(load_config(self._paths.config_file)))
+        except (OSError, *CONFIG_ERRORS):
+            return []
 
     def _saved(self, request: Request, message: str, *, saved: bool, checks: list[Check] | None = None) -> Response:
         running = refresh_status(self._paths.data_dir).running

@@ -192,22 +192,26 @@ def create_server(
     return server
 
 
-def preload(index_file: Path, embedder_for: Callable[[str], Embedder]) -> threading.Thread | None:
-    """Load the index's model in the background, so the first search doesn't wait for it."""
+def preload(
+    index_file: Path, embedder_for: Callable[[str], Embedder], on_ready: Callable[[], object] = lambda: None
+) -> threading.Thread | None:
+    """Load the index's model in the background, so the first search doesn't wait for it, then call on_ready."""
     if not index_file.exists():
         return None
-    thread = threading.Thread(target=_warm_up, args=(index_file, embedder_for), name="preload", daemon=True)
+    thread = threading.Thread(target=_warm_up, args=(index_file, embedder_for, on_ready), name="preload", daemon=True)
     thread.start()
     return thread
 
 
-def _warm_up(index_file: Path, embedder_for: Callable[[str], Embedder]) -> None:
+def _warm_up(index_file: Path, embedder_for: Callable[[str], Embedder], on_ready: Callable[[], object]) -> None:
     try:
         with closing(connect_read_only(index_file)) as db:
             model_id = index_model(db)[0]
         embedder_for(model_id).warm_up()
     except (StoreError, UnknownModelError, ModelUnavailableError) as error:
         log.warning("Not preloading the model, the first search will report why: %s", error)
+        return
+    on_ready()
 
 
 @contextmanager

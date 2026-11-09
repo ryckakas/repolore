@@ -11,7 +11,7 @@ from repolore.doctor import Check
 from repolore.paths import AppPaths
 from repolore.refresh import REQUEST_FILE
 from repolore.sources.github import RATE_LIMIT_FLOOR, GitHubError, TokenInfo
-from repolore.ui import setup_pages
+from repolore.ui import source_pages
 from repolore.ui.app import create_app
 
 TOKEN = "the-token"
@@ -45,10 +45,10 @@ def browser(paths: AppPaths) -> TestClient:
 @pytest.fixture
 def github(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Every repo discovery finds; each discover call appends the config it was given."""
-    monkeypatch.setattr(setup_pages, "resolve_token", lambda: SECRET)
-    monkeypatch.setattr(setup_pages.GitHubClient, "connect", lambda _: Closable())
+    monkeypatch.setattr(source_pages, "resolve_token", lambda: SECRET)
+    monkeypatch.setattr(source_pages.GitHubClient, "connect", lambda _: Closable())
     monkeypatch.setattr(
-        setup_pages, "github_access", lambda _: (WORKS, TokenInfo("me", frozenset({"repo"}), 5000, 5000))
+        source_pages, "github_access", lambda _: (WORKS, TokenInfo("me", frozenset({"repo"}), 5000, 5000))
     )
     configs: list[Any] = []
 
@@ -59,7 +59,7 @@ def github(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
             "me", [s for s in selected if config.selects(s.name)], [s for s in selected if not config.selects(s.name)]
         )
 
-    monkeypatch.setattr(setup_pages, "discover", discover)
+    monkeypatch.setattr(source_pages, "discover", discover)
     return configs
 
 
@@ -75,37 +75,37 @@ def save_repos(browser: TestClient, ticked: list[str], *, every: bool = False, s
     fields = {"repo": ticked, "shown": ["me/alpha", "org/gamma"] if shown is None else shown}
     if every:
         fields["every"] = ["on"]
-    return browser.post("/setup/repos", data=fields, headers=FROM_THE_PAGE)
+    return browser.post("/sources/repos", data=fields, headers=FROM_THE_PAGE)
 
 
 def save_local(browser: TestClient, roots: str, patterns: str) -> Any:
-    return browser.post("/setup/local", data={"roots": roots, "patterns": patterns}, headers=FROM_THE_PAGE)
+    return browser.post("/sources/local", data={"roots": roots, "patterns": patterns}, headers=FROM_THE_PAGE)
 
 
-def test_the_setup_page_opens_at_once_and_loads_the_repos_afterwards(
+def test_the_sources_page_opens_at_once_and_loads_the_repos_afterwards(
     browser: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(setup_pages, "discover", lambda *_: pytest.fail("the page waited for GitHub"))
+    monkeypatch.setattr(source_pages, "discover", lambda *_: pytest.fail("the page waited for GitHub"))
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources").text
 
-    assert 'data-load="/setup/repos"' in html
-    assert 'action="/setup/local"' in html
+    assert 'data-load="/sources/repos"' in html
+    assert 'action="/sources/local"' in html
 
 
-def test_the_setup_page_shows_the_current_local_settings(browser: TestClient, paths: AppPaths) -> None:
+def test_the_sources_page_shows_the_current_local_settings(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, 'local_roots = ["/one", "/two"]\nlocal_patterns = ["*.md"]\n')
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources").text
 
     assert ">/one\n/two</textarea>" in html.replace("\\", "/")
     assert ">*.md</textarea>" in html
 
 
-def test_the_setup_page_is_empty_with_no_config(browser: TestClient) -> None:
-    html = browser.get("/setup").text
+def test_the_sources_page_is_empty_with_no_config(browser: TestClient) -> None:
+    html = browser.get("/sources").text
 
-    assert 'name="roots" rows="3" spellcheck="false"></textarea>' in html
+    assert 'name="roots" rows="2" spellcheck="false"></textarea>' in html
     assert 'name="patterns" rows="3" spellcheck="false"></textarea>' in html
 
 
@@ -113,7 +113,7 @@ def test_the_setup_page_is_empty_with_no_config(browser: TestClient) -> None:
 def test_a_config_that_cant_be_read_offers_no_forms(browser: TestClient, paths: AppPaths, content: bytes) -> None:
     paths.config_file.write_bytes(content)
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources").text
 
     assert "can't be read" in html
     assert "<form" not in html.split("<main>")[1]
@@ -122,14 +122,14 @@ def test_a_config_that_cant_be_read_offers_no_forms(browser: TestClient, paths: 
 def test_html_in_a_local_setting_is_shown_as_text(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, 'local_patterns = ["</textarea><script>alert(1)</script>"]\n')
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources").text
 
     assert "<script>alert" not in html
     assert "&lt;script&gt;alert(1)" in html
 
 
 def test_the_repo_list_shows_the_login_and_every_discovered_repo(browser: TestClient, github: list[Any]) -> None:
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "me, token from gh, scopes repo" in html
     assert 'value="me/alpha"' in html
@@ -139,15 +139,15 @@ def test_the_repo_list_shows_the_login_and_every_discovered_repo(browser: TestCl
 
 
 def test_the_token_is_never_shown(browser: TestClient, github: list[Any]) -> None:
-    assert SECRET not in browser.get("/setup/repos").text
+    assert SECRET not in browser.get("/sources/repos").text
 
 
 def test_named_folders_arent_in_the_list(browser: TestClient, github: list[Any]) -> None:
-    assert "local/notes" not in browser.get("/setup/repos").text
+    assert "local/notes" not in browser.get("/sources/repos").text
 
 
 def test_without_a_config_nothing_starts_ticked(browser: TestClient, github: list[Any]) -> None:
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert not is_ticked(html, "me/alpha")
     assert not is_ticked(html, "org/gamma")
@@ -157,7 +157,7 @@ def test_without_a_config_nothing_starts_ticked(browser: TestClient, github: lis
 def test_ticks_follow_what_the_config_selects(browser: TestClient, paths: AppPaths, github: list[Any]) -> None:
     config_with(paths, 'include = ["me/*"]\n')
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert is_ticked(html, "me/alpha")
     assert not is_ticked(html, "org/gamma")
@@ -167,7 +167,7 @@ def test_ticks_follow_what_the_config_selects(browser: TestClient, paths: AppPat
 def test_an_empty_config_means_every_repo(browser: TestClient, paths: AppPaths, github: list[Any]) -> None:
     config_with(paths, "")
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert 'name="every" checked' in html
     assert is_ticked(html, "me/alpha")
@@ -178,7 +178,7 @@ def test_the_form_warns_that_globs_and_excludes_get_replaced(
 ) -> None:
     config_with(paths, 'include = ["me/*", "org/gamma"]\nexclude = ["org/old"]\n')
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "Saving replaces these entries" in html
     assert "me/*, org/old" in html
@@ -189,7 +189,7 @@ def test_the_form_warns_about_an_exact_name_that_isnt_on_the_list(
 ) -> None:
     config_with(paths, 'include = ["ME/Alpha", "org/not-listed"]\n')
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "Saving replaces these entries in repolore.toml with the ticked names: org/not-listed" in html
 
@@ -197,7 +197,7 @@ def test_the_form_warns_about_an_exact_name_that_isnt_on_the_list(
 def test_exact_names_get_no_warning(browser: TestClient, paths: AppPaths, github: list[Any]) -> None:
     config_with(paths, 'include = ["me/alpha"]\n')
 
-    assert "Saving replaces" not in browser.get("/setup/repos").text
+    assert "Saving replaces" not in browser.get("/sources/repos").text
 
 
 @pytest.mark.parametrize(
@@ -206,19 +206,19 @@ def test_exact_names_get_no_warning(browser: TestClient, paths: AppPaths, github
 def test_a_nearly_spent_rate_limit_doesnt_start_a_listing_that_would_wait_for_the_reset(
     browser: TestClient, github: list[Any], monkeypatch: pytest.MonkeyPatch, remaining: int | None, listed: bool
 ) -> None:
-    monkeypatch.setattr(setup_pages, "github_access", lambda _: (WORKS, TokenInfo("me", None, remaining, 5000)))
+    monkeypatch.setattr(source_pages, "github_access", lambda _: (WORKS, TokenInfo("me", None, remaining, 5000)))
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert bool(github) == listed
     assert ("too few GraphQL points" in html) != listed
-    assert ('href="/setup">Check again' in html) != listed
+    assert ('href="/sources">Check again' in html) != listed
 
 
 def test_no_repos_at_all_says_so(browser: TestClient, github: list[Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(setup_pages, "discover", lambda *_: Discovery("me", [], []))
+    monkeypatch.setattr(source_pages, "discover", lambda *_: Discovery("me", [], []))
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "lists no repos" in html
     assert "<form" not in html
@@ -226,21 +226,21 @@ def test_no_repos_at_all_says_so(browser: TestClient, github: list[Any], monkeyp
 
 def test_no_token_shows_the_fix_and_a_way_to_check_again(browser: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     missing = Check("GitHub", False, "No GitHub token: set REPOLORE_GITHUB_TOKEN, or log in with `gh auth login`.")
-    monkeypatch.setattr(setup_pages, "github_access", lambda _: (missing, None))
-    monkeypatch.setattr(setup_pages, "discover", lambda *_: pytest.fail("repos listed without a token"))
+    monkeypatch.setattr(source_pages, "github_access", lambda _: (missing, None))
+    monkeypatch.setattr(source_pages, "discover", lambda *_: pytest.fail("repos listed without a token"))
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "gh auth login" in html
-    assert 'href="/setup">Check again' in html
+    assert 'href="/sources">Check again' in html
     assert "<form" not in html
 
 
 def test_a_token_that_fails_shows_the_fix(browser: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     failed = Check("GitHub", False, "the token from gh didn't work: 401", "log in again with `gh auth login`")
-    monkeypatch.setattr(setup_pages, "github_access", lambda _: (failed, None))
+    monkeypatch.setattr(source_pages, "github_access", lambda _: (failed, None))
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "Fix: log in again" in html
     assert "<form" not in html
@@ -250,9 +250,9 @@ def test_a_token_missing_scopes_still_lists_the_repos(
     browser: TestClient, github: list[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     lacking = Check("GitHub", False, "me; missing read:org", "`gh auth refresh --scopes read:org`")
-    monkeypatch.setattr(setup_pages, "github_access", lambda _: (lacking, TokenInfo("me", frozenset(), 5000, 5000)))
+    monkeypatch.setattr(source_pages, "github_access", lambda _: (lacking, TokenInfo("me", frozenset(), 5000, 5000)))
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "missing read:org" in html
     assert 'value="me/alpha"' in html
@@ -265,12 +265,12 @@ def test_a_list_that_fails_is_reported(
     def fail(*_: Any) -> Discovery:
         raise error
 
-    monkeypatch.setattr(setup_pages, "discover", fail)
+    monkeypatch.setattr(source_pages, "discover", fail)
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert f"Couldn&#39;t list your repos: {error}" in html
-    assert 'href="/setup">Check again' in html
+    assert 'href="/sources">Check again' in html
 
 
 def test_a_config_broken_while_the_page_is_open_is_reported(
@@ -278,7 +278,7 @@ def test_a_config_broken_while_the_page_is_open_is_reported(
 ) -> None:
     paths.config_file.write_bytes(b"include = [")
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert 'class="notice"' in html
     assert "<form" not in html
@@ -287,9 +287,9 @@ def test_a_config_broken_while_the_page_is_open_is_reported(
 def test_html_in_a_repo_name_is_shown_as_text(
     browser: TestClient, github: list[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(setup_pages, "discover", lambda *_: Discovery("me", [source('"><script>x</script>')], []))
+    monkeypatch.setattr(source_pages, "discover", lambda *_: Discovery("me", [source('"><script>x</script>')], []))
 
-    html = browser.get("/setup/repos").text
+    html = browser.get("/sources/repos").text
 
     assert "<script>x" not in html
 
@@ -371,7 +371,7 @@ def test_a_save_during_a_refresh_applies_to_the_next_one(browser: TestClient, pa
     assert 'action="/refresh"' not in response.text
 
 
-@pytest.mark.parametrize("path", ["/setup/repos", "/setup/local", "/setup/folders", "/setup/folders/remove"])
+@pytest.mark.parametrize("path", ["/sources/repos", "/sources/local", "/sources/folders", "/sources/folders/remove"])
 @pytest.mark.parametrize("headers", [{}, {"Origin": "http://evil.example"}])
 def test_a_save_the_page_didnt_make_is_refused(
     browser: TestClient, paths: AppPaths, path: str, headers: dict[str, str]
@@ -382,8 +382,8 @@ def test_a_save_the_page_didnt_make_is_refused(
     assert not paths.config_file.exists()
 
 
-@pytest.mark.parametrize("path", ["/setup", "/setup/repos"])
-def test_the_setup_pages_need_the_cookie(paths: AppPaths, path: str) -> None:
+@pytest.mark.parametrize("path", ["/sources", "/sources/repos"])
+def test_the_source_pages_need_the_cookie(paths: AppPaths, path: str) -> None:
     client = TestClient(create_app(paths, "default", TOKEN), base_url=BASE, follow_redirects=False)
 
     assert client.get(path).status_code == 403
@@ -404,7 +404,7 @@ def test_a_read_only_config_is_reported(browser: TestClient, paths: AppPaths, mo
     def denied(*_: Any, **__: Any) -> None:
         raise PermissionError("repolore.toml is read-only")
 
-    monkeypatch.setattr(setup_pages, "save_ticks", denied)
+    monkeypatch.setattr(source_pages, "save_ticks", denied)
 
     response = save_repos(browser, ["me/alpha"])
 
@@ -481,7 +481,7 @@ def test_html_in_an_error_is_shown_as_text(browser: TestClient, tmp_path: Path) 
 def test_no_form_fields_count_as_empty(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, 'local_patterns = ["*.md"]\n')
 
-    assert browser.post("/setup/local", data={}, headers=FROM_THE_PAGE).status_code == 200
+    assert browser.post("/sources/local", data={}, headers=FROM_THE_PAGE).status_code == 200
     assert load_config(paths.config_file).local_patterns == []
 
 
@@ -501,21 +501,21 @@ WITH_A_FOLDER = PICKED + '\n[[local_folders]]\nname = "notes"\npath = "~/notes"\
 
 def add_folder(browser: TestClient, name: str, path: str, patterns: str = "") -> Any:
     return browser.post(
-        "/setup/folders", data={"name": name, "path": path, "patterns": patterns}, headers=FROM_THE_PAGE
+        "/sources/folders", data={"name": name, "path": path, "patterns": patterns}, headers=FROM_THE_PAGE
     )
 
 
 def remove_folder(browser: TestClient, name: str) -> Any:
-    return browser.post("/setup/folders/remove", data={"name": name}, headers=FROM_THE_PAGE)
+    return browser.post("/sources/folders/remove", data={"name": name}, headers=FROM_THE_PAGE)
 
 
-def test_the_setup_page_lists_the_local_folders(browser: TestClient, paths: AppPaths) -> None:
+def test_the_folder_list_shows_the_local_folders(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, WITH_A_FOLDER)
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources/folders").text
 
     assert "local/notes" in html
-    assert 'action="/setup/folders/remove"' in html
+    assert 'action="/sources/folders/remove"' in html
     assert 'name="name" value="notes"' in html
     assert "**/*.md" in html
 
@@ -523,10 +523,10 @@ def test_the_setup_page_lists_the_local_folders(browser: TestClient, paths: AppP
 def test_no_local_folders_says_so_and_offers_the_form(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, PICKED)
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources/folders").text
 
     assert "None yet." in html
-    assert 'action="/setup/folders"' in html
+    assert 'action="/sources/folders"' in html
 
 
 def test_a_folder_is_added_and_shown_with_what_it_matches(browser: TestClient, paths: AppPaths, tmp_path: Path) -> None:
@@ -578,7 +578,7 @@ def test_a_first_run_saves_the_repos_before_a_folder(browser: TestClient, paths:
 def test_missing_folder_fields_count_as_empty(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, PICKED)
 
-    response = browser.post("/setup/folders", data={}, headers=FROM_THE_PAGE)
+    response = browser.post("/sources/folders", data={}, headers=FROM_THE_PAGE)
 
     assert response.status_code == 400
     assert "name and a path" in response.text
@@ -600,7 +600,7 @@ def test_removing_a_folder_during_a_refresh_says_it_applies_to_the_next(
     browser: TestClient, paths: AppPaths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_with(paths, WITH_A_FOLDER)
-    monkeypatch.setattr(setup_pages, "refresh_status", lambda _: type("Status", (), {"running": True}))
+    monkeypatch.setattr(source_pages, "refresh_status", lambda _: type("Status", (), {"running": True}))
 
     response = remove_folder(browser, "notes")
 
@@ -646,7 +646,7 @@ def test_a_folder_change_reports_a_config_that_cant_be_opened(
 def test_a_folder_pattern_is_shown_as_text(browser: TestClient, paths: AppPaths) -> None:
     config_with(paths, PICKED + '\n[[local_folders]]\nname = "n"\npath = "~/n"\npatterns = ["<b>x</b>.md"]\n')
 
-    html = browser.get("/setup").text
+    html = browser.get("/sources/folders").text
 
     assert "<b>x</b>" not in html
     assert "&lt;b&gt;x&lt;/b&gt;.md" in html
@@ -658,3 +658,118 @@ def test_a_refused_folder_shows_what_was_typed_as_text(browser: TestClient, path
     response = add_folder(browser, '"><script>alert(1)</script>', "~/x")
 
     assert "<script>alert" not in response.text
+
+
+def test_the_sources_page_doesnt_look_in_the_folders_itself(
+    browser: TestClient, paths: AppPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_with(paths, WITH_A_FOLDER)
+    monkeypatch.setattr(source_pages, "folder_check", lambda *_: pytest.fail("the page waited for the folders"))
+    monkeypatch.setattr(source_pages, "checkout_checks", lambda *_: pytest.fail("the page waited for the checkouts"))
+
+    html = browser.get("/sources").text
+
+    assert 'data-load="/sources/folders"' in html
+    assert 'data-load="/sources/matches"' in html
+
+
+def test_the_page_says_where_it_saves(browser: TestClient, paths: AppPaths) -> None:
+    assert f"<code>{paths.config_file}</code>" in browser.get("/sources").text
+
+
+def test_a_folder_shows_how_many_files_it_has(browser: TestClient, paths: AppPaths, tmp_path: Path) -> None:
+    config_with(paths, PICKED)
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    (folder / "a.md").write_text("# A", encoding="utf-8")
+    (folder / "b.md").write_text("# B", encoding="utf-8")
+    add_folder(browser, "notes", str(folder))
+
+    html = browser.get("/sources/folders").text
+
+    assert "2 files in" in html
+    assert '<div class="pass folder-status">' in html
+
+
+def test_a_folder_with_no_matches_warns_and_says_how_to_fix_it(
+    browser: TestClient, paths: AppPaths, tmp_path: Path
+) -> None:
+    config_with(paths, PICKED)
+    folder = tmp_path / "empty"
+    folder.mkdir()
+    add_folder(browser, "empty", str(folder))
+
+    html = browser.get("/sources/folders").text
+
+    assert "no markdown matches in" in html
+    assert '<div class="warning folder-status">' in html
+    assert "Fix: check its path and patterns" in html
+
+
+def test_a_folder_that_is_gone_fails(browser: TestClient, paths: AppPaths, tmp_path: Path) -> None:
+    config_with(paths, PICKED)
+    folder = tmp_path / "gone"
+    folder.mkdir()
+    add_folder(browser, "gone", str(folder))
+    folder.rmdir()
+
+    html = browser.get("/sources/folders").text
+
+    assert "not found:" in html
+    assert '<div class="fail folder-status">' in html
+
+
+def test_the_add_form_is_folded_away_until_a_save_is_refused(
+    browser: TestClient, paths: AppPaths, tmp_path: Path
+) -> None:
+    config_with(paths, PICKED)
+
+    assert '<details class="add-folder">' in browser.get("/sources/folders").text
+
+    refused = add_folder(browser, "notes", str(tmp_path / "missing"))
+
+    assert refused.status_code == 400
+    assert '<details class="add-folder" open>' in refused.text
+
+
+def test_a_config_that_cant_be_read_shows_no_folders_or_matches(browser: TestClient, paths: AppPaths) -> None:
+    paths.config_file.write_bytes(b"include = [")
+
+    assert "None yet." in browser.get("/sources/folders").text
+    assert "<li" not in browser.get("/sources/matches").text
+
+
+def test_no_local_settings_match_nothing(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, PICKED)
+
+    assert "<li" not in browser.get("/sources/matches").text
+
+
+def test_the_matches_name_what_the_checkouts_hold(
+    browser: TestClient, paths: AppPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        source_pages,
+        "checkout_checks",
+        lambda _: iter([Check("local checkouts", True, "1 file in 1 checkout: me/alpha")]),
+    )
+
+    assert "1 file in 1 checkout: me/alpha" in browser.get("/sources/matches").text
+
+
+def test_the_repo_form_has_a_filter_and_counts_the_ticks(
+    browser: TestClient, paths: AppPaths, github: list[Any]
+) -> None:
+    config_with(paths, PICKED)
+
+    html = browser.get("/sources/repos").text
+
+    assert "data-filter-repos" in html
+    assert "data-ticked>1 ticked" in html
+    assert ">owned</span>" in html
+
+
+def test_every_repo_counts_as_all_ticked(browser: TestClient, paths: AppPaths, github: list[Any]) -> None:
+    config_with(paths, "")
+
+    assert "data-ticked>All ticked" in browser.get("/sources/repos").text

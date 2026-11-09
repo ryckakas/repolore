@@ -1,0 +1,35 @@
+<label for="query">What to look for, in plain words</label>
+<input type="text" id="query" name="query" required autofocus>
+<div class="fields">
+  <div class="wide">
+    <label for="repo">Repo, as owner/name</label>
+    <input type="text" id="repo" name="repo" placeholder="any" spellcheck="false">
+  </div>
+  <div>
+    <label for="kind">Kind</label>
+    <select id="kind" name="kind">
+      <option value="">Any</option>
+      {% for kind in kinds %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="mode">Mode</label>
+    <select id="mode" name="mode">
+      {% for mode in modes %}<option value="{{ mode }}">{{ mode }}</option>{% endfor %}
+    </select>
+  </div>
+</div>
+<details class="more">
+  <summary>More: author, k, distinct</summary>
+  <div class="fields">
+    <div class="wide">
+      <label for="author">Author</label>
+      <input type="text" id="author" name="author" placeholder="any" spellcheck="false">
+    </div>
+    <div>
+      <label for="k">k</label>
+      <input type="number" id="k" name="k" min="1" max="{{ max_k }}" value="8">
+    </div>
+    <label class="tick"><input type="checkbox" name="distinct" checked> distinct</label>
+  </div>
+</details>
