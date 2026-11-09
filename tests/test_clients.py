@@ -701,7 +701,8 @@ def test_cursor_gets_references_to_the_variables_that_are_set(
 
 def test_claude_desktop_says_to_restart_it(machine: Machine) -> None:
     assert CLAUDE_DESKTOP.add() == (
-        f"in {machine.path(f'.config/Claude/{DESKTOP_FILE}')}; quit and restart Claude Desktop to load it"
+        f"in {machine.path(f'.config/Claude/{DESKTOP_FILE}')}; quit Claude Desktop and start it again now; "
+        "until then, a change to its settings removes the entry"
     )
 
 
