@@ -17,8 +17,10 @@ from repolore.config_files import replace_file
 ALL = "all"
 PLANS_PATTERN = ".plans/**/*.md"
 NUMBERS = re.compile(r"(\d+)(?:-(\d+))?")
+REPO_GLOB = re.compile(r"[^/\s]+/[^/\s]+")
 FOLDERS_KEY = "local_folders"
-TABLE_KEYS = (FOLDERS_KEY, "branches")
+BRANCHES_KEY = "branches"
+TABLE_KEYS = (FOLDERS_KEY, BRANCHES_KEY)
 
 
 class SelectionError(ValueError):
@@ -163,13 +165,36 @@ def add_local_folder(path: Path, name: str, location: str, patterns: list[str]) 
     if patterns:
         entry["patterns"] = checked_patterns(patterns)
     _require_repos_saved(path)
-    _edit_config(path, lambda document: _append_folder(document, entry))
+    _edit_config(path, lambda document: _append_entry(document, FOLDERS_KEY, entry))
 
 
 def remove_local_folder(path: Path, name: str) -> None:
-    if name not in [folder.name for folder in load_config(path).local_folders]:
+    names = [folder.name for folder in load_config(path).local_folders]
+    if name not in names:
         raise SelectionError(f"There's no local folder named {name}.")
-    _edit_config(path, lambda document: _delete_folder(document, name))
+    _edit_config(path, lambda document: _delete_entry(document, FOLDERS_KEY, names.index(name)))
+
+
+def add_branch_rule(path: Path, repo: str, patterns: list[str]) -> None:
+    _check_new_branch_rule(load_config(path), repo, patterns)
+    _require_repos_saved(path)
+    _edit_config(path, lambda document: _append_entry(document, BRANCHES_KEY, {"repo": repo, "patterns": patterns}))
+
+
+def remove_branch_rule(path: Path, repo: str, patterns: list[str]) -> None:
+    rules = [(rule.repo, rule.patterns) for rule in load_config(path).branches]
+    if (repo, patterns) not in rules:
+        raise SelectionError(f"There are no such branches for {repo}.")
+    _edit_config(path, lambda document: _delete_entry(document, BRANCHES_KEY, rules.index((repo, patterns))))
+
+
+def _check_new_branch_rule(config: Config, repo: str, patterns: list[str]) -> None:
+    if not repo or not patterns:
+        raise SelectionError("Give a repo and at least one branch.")
+    if not REPO_GLOB.fullmatch(repo):
+        raise SelectionError(f"{repo} isn't a repo: use owner/name, or a glob such as your-org/*.")
+    if repo.lower() in {rule.repo.lower() for rule in config.branches}:
+        raise SelectionError(f"There are already branches for {repo}: remove them to change them.")
 
 
 def _check_new_folder(config: Config, name: str, location: str) -> None:
@@ -190,21 +215,21 @@ def _check_new_folder(config: Config, name: str, location: str) -> None:
 def _require_repos_saved(path: Path) -> None:
     # A file with no include selects every repo, so only saving the repos may create it.
     if not path.exists():
-        raise SelectionError("Save your repos first, then the local documents.")
+        raise SelectionError("Save your repos first.")
 
 
-def _append_folder(document: TOMLDocument, entry: dict[str, Any]) -> None:
-    if FOLDERS_KEY not in document:
-        document[FOLDERS_KEY] = tomlkit.aot()
-    folders: Any = document[FOLDERS_KEY]
-    folders.append(entry)
+def _append_entry(document: TOMLDocument, key: str, entry: dict[str, Any]) -> None:
+    if key not in document:
+        document[key] = tomlkit.aot()
+    entries: Any = document[key]
+    entries.append(entry)
 
 
-def _delete_folder(document: TOMLDocument, name: str) -> None:
-    folders: Any = document[FOLDERS_KEY]
-    del folders[[folder["name"] for folder in folders].index(name)]
-    if not folders:
-        del document[FOLDERS_KEY]
+def _delete_entry(document: TOMLDocument, key: str, index: int) -> None:
+    entries: Any = document[key]
+    del entries[index]
+    if not entries:
+        del document[key]
 
 
 def update_config(path: Path, keys: dict[str, list[str]]) -> None:

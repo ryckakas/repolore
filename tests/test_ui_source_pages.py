@@ -371,7 +371,17 @@ def test_a_save_during_a_refresh_applies_to_the_next_one(browser: TestClient, pa
     assert 'action="/refresh"' not in response.text
 
 
-@pytest.mark.parametrize("path", ["/sources/repos", "/sources/local", "/sources/folders", "/sources/folders/remove"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/sources/repos",
+        "/sources/local",
+        "/sources/folders",
+        "/sources/folders/remove",
+        "/sources/branches",
+        "/sources/branches/remove",
+    ],
+)
 @pytest.mark.parametrize("headers", [{}, {"Origin": "http://evil.example"}])
 def test_a_save_the_page_didnt_make_is_refused(
     browser: TestClient, paths: AppPaths, path: str, headers: dict[str, str]
@@ -641,6 +651,181 @@ def test_a_folder_change_reports_a_config_that_cant_be_opened(
 
     assert response.status_code == 400
     assert 'class="notice"' in response.text
+
+
+WITH_BRANCHES = PICKED + '\n[[branches]]\nrepo = "me/alpha"\npatterns = ["staging/*", "live/*"]\n'
+
+
+def add_branches(browser: TestClient, repo: str, patterns: str) -> Any:
+    return browser.post("/sources/branches", data={"repo": repo, "patterns": patterns}, headers=FROM_THE_PAGE)
+
+
+def remove_branches(browser: TestClient, repo: str, patterns: list[str]) -> Any:
+    return browser.post("/sources/branches/remove", data={"repo": repo, "pattern": patterns}, headers=FROM_THE_PAGE)
+
+
+def test_the_sources_page_loads_the_branches_as_a_fragment(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, PICKED)
+
+    assert 'data-load="/sources/branches"' in browser.get("/sources").text
+
+
+def test_no_branches_says_so_and_offers_the_form(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, PICKED)
+
+    html = browser.get("/sources/branches").text
+
+    assert "None yet." in html
+    assert 'action="/sources/branches"' in html
+    assert '<details class="add-folder">' in html
+
+
+def test_the_list_shows_each_rule_with_its_branches(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, WITH_BRANCHES)
+
+    html = browser.get("/sources/branches").text
+
+    assert "me/alpha" in html
+    assert "staging/*, live/*" in html
+    assert 'action="/sources/branches/remove"' in html
+    assert 'name="pattern" value="live/*"' in html
+
+
+def test_branches_are_added_and_shown(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, PICKED)
+
+    response = add_branches(browser, " me/alpha ", "staging/*\n\nstaging/*\nlive/*\n")
+
+    assert response.status_code == 200
+    assert "Added branches for me/alpha." in response.text
+    assert "staging/*, live/*" in response.text
+    assert 'action="/refresh"' in response.text
+    rule = load_config(paths.config_file).branches[0]
+    assert (rule.repo, rule.patterns) == ("me/alpha", ["staging/*", "live/*"])
+
+
+def test_adding_branches_keeps_the_files_comments_and_folders(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, "# mine\n" + WITH_A_FOLDER)
+
+    add_branches(browser, "me/alpha", "staging/*")
+
+    config = load_config(paths.config_file)
+    assert "# mine" in paths.config_file.read_text(encoding="utf-8")
+    assert [folder.name for folder in config.local_folders] == ["notes"]
+    assert [rule.repo for rule in config.branches] == ["me/alpha"]
+
+
+@pytest.mark.parametrize(
+    ("repo", "patterns", "says"),
+    [
+        pytest.param("", "staging/*", "Give a repo", id="no repo"),
+        pytest.param("me/alpha", " \n ", "at least one branch", id="no branches"),
+        pytest.param("alpha", "staging/*", "isn&#39;t a repo", id="not owner/name"),
+        pytest.param("a/b/c", "staging/*", "isn&#39;t a repo", id="too many parts"),
+        pytest.param("me/", "staging/*", "isn&#39;t a repo", id="no name"),
+        pytest.param("/alpha", "staging/*", "isn&#39;t a repo", id="no owner"),
+        pytest.param("me /alpha", "staging/*", "isn&#39;t a repo", id="a space"),
+    ],
+)
+def test_refused_branches_keep_what_was_typed(
+    browser: TestClient, paths: AppPaths, repo: str, patterns: str, says: str
+) -> None:
+    config_with(paths, PICKED)
+
+    response = add_branches(browser, repo, patterns)
+
+    assert response.status_code == 400
+    assert says in response.text
+    assert '<details class="add-folder" open>' in response.text
+    assert f'name="repo" spellcheck="false" required value="{repo}"' in response.text
+    assert f">{patterns.strip()}</textarea>" in response.text
+    assert load_config(paths.config_file).branches == []
+
+
+def test_a_repo_with_branches_already_is_reported_whatever_its_case(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, WITH_BRANCHES)
+
+    response = add_branches(browser, "Me/Alpha", "release/*")
+
+    assert response.status_code == 400
+    assert "already branches for Me/Alpha" in response.text
+    assert len(load_config(paths.config_file).branches) == 1
+
+
+def test_a_first_run_saves_the_repos_before_branches(browser: TestClient, paths: AppPaths) -> None:
+    response = add_branches(browser, "me/alpha", "staging/*")
+
+    assert response.status_code == 400
+    assert "Save your repos first" in response.text
+    assert not paths.config_file.exists()
+
+
+def test_branches_are_removed_and_says_what_that_does(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, WITH_BRANCHES)
+
+    response = remove_branches(browser, "me/alpha", ["staging/*", "live/*"])
+
+    assert response.status_code == 200
+    assert "stay in the index until repolore ingest --full." in response.text
+    assert "None yet." in response.text
+    assert "branches" not in paths.config_file.read_text(encoding="utf-8")
+
+
+def test_removing_one_of_two_rules_for_a_repo_takes_the_one_shown(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, WITH_BRANCHES + '\n[[branches]]\nrepo = "me/alpha"\npatterns = ["release/*"]\n')
+
+    remove_branches(browser, "me/alpha", ["release/*"])
+
+    assert [rule.patterns for rule in load_config(paths.config_file).branches] == [["staging/*", "live/*"]]
+
+
+def test_removing_branches_that_arent_there_is_reported(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, WITH_BRANCHES)
+
+    response = remove_branches(browser, "me/alpha", ["other/*"])
+
+    assert response.status_code == 400
+    assert "no such branches for me/alpha" in response.text
+    assert len(load_config(paths.config_file).branches) == 1
+
+
+def test_a_branch_change_during_a_refresh_says_it_applies_to_the_next(
+    browser: TestClient, paths: AppPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_with(paths, PICKED)
+    monkeypatch.setattr(source_pages, "refresh_status", lambda _: type("Status", (), {"running": True}))
+
+    response = add_branches(browser, "me/alpha", "staging/*")
+
+    assert "applies to the next one" in response.text
+    assert 'action="/refresh"' not in response.text
+
+
+@pytest.mark.parametrize("change", ["add", "remove"])
+def test_a_branch_change_leaves_a_config_that_cant_be_read_alone(
+    browser: TestClient, paths: AppPaths, change: str
+) -> None:
+    paths.config_file.write_bytes(b"include = [")
+
+    if change == "add":
+        response = add_branches(browser, "me/alpha", "staging/*")
+    else:
+        response = remove_branches(browser, "me/alpha", ["staging/*"])
+
+    assert response.status_code == 400
+    assert 'class="notice"' in response.text
+    assert "None yet." in response.text
+    assert paths.config_file.read_bytes() == b"include = ["
+
+
+def test_branches_are_shown_as_text(browser: TestClient, paths: AppPaths) -> None:
+    config_with(paths, PICKED + '\n[[branches]]\nrepo = "me/<i>x</i>"\npatterns = ["<b>x</b>"]\n')
+
+    html = browser.get("/sources/branches").text
+
+    assert "<b>x</b>" not in html
+    assert "<i>x</i>" not in html
+    assert "&lt;b&gt;x&lt;/b&gt;" in html
 
 
 def test_a_folder_pattern_is_shown_as_text(browser: TestClient, paths: AppPaths) -> None:

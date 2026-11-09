@@ -1,0 +1,33 @@
+{% if notice is defined %}{% include "_notice.html" %}{% endif %}
+{% if message is defined %}{% include "_saved.html" %}{% endif %}
+{% if rules %}
+<ul class="folders">
+  {% for rule in rules %}
+  <li>
+    <div class="folder">
+      <code class="folder-name">{{ rule.repo }}</code>
+      <div class="folder-status"><span>{{ rule.patterns | join(", ") }}</span></div>
+    </div>
+    <form method="post" action="/sources/branches/remove" data-into="#branches" data-waiting="Removing…">
+      <input type="hidden" name="repo" value="{{ rule.repo }}">
+      {% for pattern in rule.patterns %}
+      <input type="hidden" name="pattern" value="{{ pattern }}">
+      {% endfor %}
+      <button type="submit" class="quiet" aria-label="Remove the branches of {{ rule.repo }}">Remove</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">None yet.</p>
+{% endif %}
+<details class="add-folder"{% if draft.repo or draft.patterns %} open{% endif %}>
+  <summary>Add branches</summary>
+  <form method="post" action="/sources/branches" data-into="#branches" data-waiting="Saving…">
+    <label for="branch-repo">Repo as owner/name, or a glob such as your-org/*</label>
+    <input type="text" id="branch-repo" name="repo" spellcheck="false" required value="{{ draft.repo }}">
+    <label for="branch-patterns">Branches, one glob per line, such as staging/*</label>
+    <textarea id="branch-patterns" name="patterns" rows="2" spellcheck="false" required>{{ draft.patterns }}</textarea>
+    <button type="submit">Add branches</button>
+  </form>
+</details>

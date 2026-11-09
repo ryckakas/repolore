@@ -9,7 +9,7 @@ from starlette.datastructures import FormData
 from starlette.requests import Request
 from starlette.responses import Response
 
-from repolore.config import FOLDER_OWNER, Config, LocalFolder, load_config
+from repolore.config import FOLDER_OWNER, BranchRule, Config, LocalFolder, load_config
 from repolore.discovery import discover
 from repolore.doctor import CONFIG_ERRORS, Check, checkout_checks, folder_check, github_access
 from repolore.paths import AppPaths
@@ -19,7 +19,9 @@ from repolore.setup import (
     RepoChange,
     RepoTicks,
     SelectionError,
+    add_branch_rule,
     add_local_folder,
+    remove_branch_rule,
     remove_local_folder,
     save_local_settings,
     save_ticks,
@@ -55,6 +57,14 @@ class FolderDraft:
     patterns: str = ""
 
 
+@dataclass(frozen=True)
+class BranchDraft:
+    """What the add-branches form holds, so a refused save doesn't lose what was typed."""
+
+    repo: str = ""
+    patterns: str = ""
+
+
 class SourcePages:
     def __init__(self, paths: AppPaths, db: str) -> None:
         self._paths = paths
@@ -79,6 +89,9 @@ class SourcePages:
 
     def folders(self, request: Request) -> Response:
         return self._folders(request)
+
+    def branches(self, request: Request) -> Response:
+        return self._branches(request)
 
     def repos(self, request: Request) -> Response:
         github, access = github_access(GitHubClient.connect)
@@ -117,6 +130,15 @@ class SourcePages:
     async def remove_folder(self, request: Request) -> Response:
         form = await request.form()
         return await run_in_threadpool(self._remove_folder, request, form_text(form, "name"))
+
+    async def add_branches(self, request: Request) -> Response:
+        form = await request.form()
+        draft = BranchDraft(form_text(form, "repo"), form_text(form, "patterns"))
+        return await run_in_threadpool(self._add_branches, request, draft)
+
+    async def remove_branches(self, request: Request) -> Response:
+        form = await request.form()
+        return await run_in_threadpool(self._remove_branches, request, form_text(form, "repo"), _texts(form, "pattern"))
 
     def _repo_form(self, request: Request, github: Check, config: Config) -> Response:
         with closing(GitHubClient.connect(resolve_token())) as client:
@@ -177,6 +199,38 @@ class SourcePages:
         except (OSError, *CONFIG_ERRORS):
             return []
         return [FolderRow(folder, folder_check(folder, config.max_local_files)) for folder in config.local_folders]
+
+    def _add_branches(self, request: Request, draft: BranchDraft) -> Response:
+        try:
+            add_branch_rule(self._paths.config_file, draft.repo, _lines(draft.patterns))
+        except SAVE_ERRORS as error:
+            return self._branches(request, 400, draft, notice=str(error))
+        return self._changed_branches(request, f"Added branches for {draft.repo}.")
+
+    def _remove_branches(self, request: Request, repo: str, patterns: list[str]) -> Response:
+        try:
+            remove_branch_rule(self._paths.config_file, repo, patterns)
+        except SAVE_ERRORS as error:
+            return self._branches(request, 400, notice=str(error))
+        message = f"Removed the branches of {repo}. Their commits stay in the index until repolore ingest --full."
+        return self._changed_branches(request, message)
+
+    def _changed_branches(self, request: Request, message: str) -> Response:
+        running = refresh_status(self._paths.data_dir).running
+        return self._branches(request, message=message, saved=True, running=running)
+
+    def _branches(
+        self, request: Request, status_code: int = 200, draft: BranchDraft | None = None, **context: Any
+    ) -> Response:
+        return self._render(
+            request, "_branches.html", status_code, rules=self._branch_rules(), draft=draft or BranchDraft(), **context
+        )
+
+    def _branch_rules(self) -> list[BranchRule]:
+        try:
+            return load_config(self._paths.config_file).branches
+        except (OSError, *CONFIG_ERRORS):
+            return []
 
     def _checkout_checks(self) -> list[Check]:
         try:
