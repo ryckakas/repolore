@@ -242,9 +242,9 @@ def test_every_client_here_says_nothing_is_missing(browser: TestClient, monkeypa
 
 
 def test_a_broken_registration_shows_its_fix_and_no_button(
-    browser: TestClient, monkeypatch: pytest.MonkeyPatch
+    browser: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    gone = Entry("repolore", ("Z:/gone/repolore-mcp.exe",), "user", "`remove it`")
+    gone = Entry("repolore", (str(tmp_path / "gone" / "repolore-mcp"),), "user", "`remove it`")
     use(monkeypatch, FakeClient([gone]).client())
 
     html = browser.get("/clients/list").text
