@@ -286,7 +286,9 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   once the server's preload finishes), Stop and Start through `relay`, imported only then, and the tail of its log.
   `ui/source_pages.py` has the forms for what's indexed: GitHub and the repo list load as a fragment, since listing
   takes dozens of requests, what the local settings match and each folder's status too, since they walk the disk, and
-  a form comes back as a fragment, so a save needs no second listing. Each repo row posts a hidden `shown` field, which
+  a form comes back as a fragment, so a save needs no second listing. `[[branches]]` rules are added and removed there
+  like local folders; a rule has no status, because what its patterns match is only known from GitHub at the next
+  refresh, which logs it. Each repo row posts a hidden `shown` field, which
   is how a save knows what was on the form, so the filter only hides rows. `setup.update_config` edits only the keys a
   form owns through `tomlkit`, keeping comments, and checks the result still loads before replacing the file. Only
   saving the repos may create `repolore.toml`, because a file with no `include` selects every repo, so a first run

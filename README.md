@@ -146,6 +146,8 @@ same way. See [MCP clients](https://github.com/ryckakas/repolore#mcp-clients) fo
    patterns = ["staging/*", "live/*"]          # globs over branch names, case-sensitive
    ```
 
+   `repolore ui` can add and remove `[[branches]]` on its Sources page.
+
    Commits are read from the default branch and from any others `[[branches]]` names, and a commit is indexed only
    when no PR has it. A PR from one of these branches doesn't count, so a fix pushed to `staging/x` and released by a
    `staging/x` to `live/x` PR is still found. A release through a branch you haven't listed counts as that commit's

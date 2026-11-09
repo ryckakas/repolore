@@ -9,6 +9,11 @@
   <div id="repos" data-load="/sources/repos" aria-live="polite">Asking GitHub for your repos, which can take a minute…</div>
 </section>
 <section>
+  <h2>Branches</h2>
+  <p class="muted">Commits come from each repo's default branch. Add long-lived branches, such as staging or release ones, whose commits were pushed directly. A PR from one of these doesn't count as those commits' PR, so they stay searchable.</p>
+  <div id="branches" data-load="/sources/branches" aria-live="polite">Reading your branches…</div>
+</section>
+<section>
   <h2>Documents in your checkouts</h2>
   <p class="muted">Markdown next to your code that is never pushed, such as plans. Found by repo, so it is searched with that repo.</p>
   <form id="local-form" method="post" action="/sources/local" data-into="#local-matches" data-waiting="Saving…">
