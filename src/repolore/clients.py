@@ -489,7 +489,7 @@ CLAUDE_DESKTOP = _json_client(
     (),
     MCP_SERVERS,
     _claude_desktop_entry,
-    then="; quit and restart Claude Desktop to load it",
+    then="; quit Claude Desktop and start it again now; until then, a change to its settings removes the entry",
 )
 CURSOR = _json_client(
     "cursor",

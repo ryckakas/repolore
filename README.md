@@ -310,9 +310,11 @@ the server.
 <details>
 <summary><b>Claude Desktop, Cursor, VS Code, Gemini CLI, Zed, OpenCode and Devin CLI</b></summary>
 
-- **Claude Desktop:** quit it fully and restart it after registering. It gets no token, because it has no documented
-  way to reference a variable. On Windows, a Store install is reported to read its config from its own folder under
-  `Packages`, and `setup` writes there.
+- **Claude Desktop:** quit it fully and start it again right after registering. A copy that's already running hasn't
+  loaded the entry, so the next time it saves one of its own settings it removes it. `repolore doctor` shows when that
+  has happened, and registering again puts it back. It gets no token, because it has no documented way to reference a
+  variable. On Windows, a Store install is reported to read its config from its own folder under `Packages`, and
+  `setup` writes there.
 - **Claude Desktop and the Cursor CLI** are reported to cut a tool call off at about 60 seconds, with no setting to
   change it. A first search that waits for the model takes about half a minute, so it should fit.
 - **Cursor and Devin CLI:** variables that are set when `setup` runs go in as `${env:NAME}`. An app started from a dock
