@@ -86,7 +86,7 @@ jobs:
         with:
           persist-credentials: false
       # An exact release, since each one adds corrections; Dependabot proposes the next one.
-      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
+      - uses: crate-ci/typos@4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85 # v1.52.0
 
   # Workflow security: pinned actions, least-privilege tokens, no credentials left behind, no
   # template injection.
