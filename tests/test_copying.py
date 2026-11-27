@@ -87,6 +87,19 @@ def test_the_copy_holds_the_data_and_the_settings_and_leaves_the_running_state_b
     assert copied.files == len(KEPT) + 2
 
 
+def test_repos_named_like_what_is_left_behind_are_copied(home: AppPaths, tmp_path: Path) -> None:
+    repos = [
+        *["acme/server-api", "acme/clients", "clients/tool", "acme/x.lock", "me/dev-journal"],
+        *["me/repolore.toml", "evals/questions.yaml", "me/refresh.requested"],
+    ]
+    write_files(home.data_dir, {f"raw/{repo}/pulls.json": "[]" for repo in repos})
+
+    copy_home(home, tmp_path / "new-home")
+
+    for repo in repos:
+        assert (tmp_path / "new-home" / "raw" / repo / "pulls.json").exists(), repo
+
+
 def test_the_databases_are_copied_whole_while_a_server_reads_and_a_writer_holds_changes_in_the_wal(
     home: AppPaths, tmp_path: Path
 ) -> None:

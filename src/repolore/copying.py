@@ -7,19 +7,21 @@ import sys
 from collections.abc import Callable
 from contextlib import AbstractContextManager, closing, nullcontext
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from repolore.paths import CONFIG_FILENAME, QUESTIONS_FILENAME, AppPaths
 from repolore.refresh import REQUEST_FILE, no_refresh
 
 DATABASE_SUFFIX = ".db"
-# A database's journal and WAL are part of it only to SQLite, which the backup asks; a lock, an unfinished download, a
-# half-written status, the shared server's address and token, and the relays' locks belong to the processes of the
-# home being copied.
-LEFT_BEHIND = ("*-wal", "*-shm", "*-journal", "*.lock", "*.tmp", "*.partial", "server-*", REQUEST_FILE)
-# The settings come from where they're read, which needn't be the data dir; a copy there that isn't read is left out.
-SETTINGS = (CONFIG_FILENAME, QUESTIONS_FILENAME)
-CLIENTS_FOLDER = "clients"
+# A database's journal and WAL are part of it only to SQLite, which the backup asks; a lock, an unfinished download and
+# a half-written status belong to the processes of the home being copied. Files only, because the raw cache's folders
+# are named after GitHub owners and repos, which can look like any of these.
+LEFT_BEHIND_FILES = ("*-wal", "*-shm", "*-journal", "*.lock", "*.tmp", "*.partial")
+# For the same reason only at the top of the data dir: the shared server's address and token, the relays' locks in
+# clients/<db>/, and a pending refresh request.
+LEFT_BEHIND_AT_TOP = ("server-*", "clients", REQUEST_FILE)
+EVALS_FOLDER = "evals"
 # From <sys/ioctl.h> on Linux: _IOW(0x94, 9, int).
 FICLONE = 0x40049409
 
@@ -48,11 +50,12 @@ def copy_home(paths: AppPaths, target: Path) -> Copied:
         try:
             target.mkdir(parents=True, exist_ok=True)
             if paths.data_dir.is_dir():
+                left_behind = partial(_left_behind, paths.data_dir)
                 shutil.copytree(
-                    paths.data_dir, target, ignore=_left_behind, copy_function=counter.copy, dirs_exist_ok=True
+                    paths.data_dir, target, ignore=left_behind, copy_function=counter.copy, dirs_exist_ok=True
                 )
             _copy_setting(paths.config_file, target / CONFIG_FILENAME, counter)
-            _copy_setting(paths.questions_file, target / "evals" / QUESTIONS_FILENAME, counter)
+            _copy_setting(paths.questions_file, target / EVALS_FOLDER / QUESTIONS_FILENAME, counter)
         except BaseException:
             _remove_copy(target, created)
             raise
@@ -73,14 +76,19 @@ def _refreshes_held(data_dir: Path) -> AbstractContextManager[None]:
     return no_refresh(data_dir) if data_dir.is_dir() else nullcontext()
 
 
-def _left_behind(folder: str, names: list[str]) -> set[str]:
-    left = {
-        name for name in names if name in SETTINGS or any(fnmatch.fnmatch(name, pattern) for pattern in LEFT_BEHIND)
-    }
-    # The relays' locks are in clients/<db>/, which only a relay of the copied home should create.
-    if CLIENTS_FOLDER in names and (Path(folder) / CLIENTS_FOLDER).is_dir():
-        left.add(CLIENTS_FOLDER)
+def _left_behind(data_dir: Path, folder: str, names: list[str]) -> set[str]:
+    """What copytree skips in a folder; the settings too, which come from where they're read, not the data dir."""
+    here = Path(folder)
+    left = {name for name in names if _matches(name, LEFT_BEHIND_FILES) and (here / name).is_file()}
+    if here == data_dir:
+        left |= {name for name in names if name == CONFIG_FILENAME or _matches(name, LEFT_BEHIND_AT_TOP)}
+    elif here == data_dir / EVALS_FOLDER and QUESTIONS_FILENAME in names:
+        left.add(QUESTIONS_FILENAME)
     return left
+
+
+def _matches(name: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
 
 
 class _Counter:
