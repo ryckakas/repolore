@@ -9,17 +9,25 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from repolore import __version__
-from repolore.clients import CLIENTS, Entry, McpClient, RegistrationError, is_connected, repolore_entries
+from repolore.clients import (
+    CLIENTS,
+    Entry,
+    McpClient,
+    RegistrationError,
+    is_connected,
+    managed_by,
+    repolore_entries,
+)
 from repolore.config import Config, LocalFolder, load_config
 from repolore.embedding.engines import build_engine
 from repolore.embedding.local import VOYAGE_NANO, is_downloaded, spec_for
 from repolore.indexing import WHOLE
 from repolore.paths import AppPaths
 from repolore.refresh import LOG_FILE, refresh_status
-from repolore.server_state import ServerFiles, connected_relays, is_running, read_discovery
+from repolore.server_state import ServerFiles, ServerStatus, server_status
 from repolore.setup import PLANS_PATTERN
 from repolore.sources.github import (
     TOKEN_ENV,
@@ -60,16 +68,99 @@ class Check:
         return "✓" if self.ok else "✗"
 
 
+@dataclass(frozen=True)
+class Listing:
+    """A client that's here, with every registration of repolore it has, or why they couldn't be read."""
+
+    client: McpClient
+    entries: tuple[Entry, ...] = ()
+    error: str | None = None
+
+
+class Registration(BaseModel):
+    client: str
+    client_name: str
+    name: str
+    command: list[str]
+    scope: str
+    for_every_project: bool
+    remove: str
+
+
+class Diagnosis(BaseModel):
+    """Everything doctor finds, for another program: the exit code alone can't say which check failed."""
+
+    version: str
+    managed_by: str | None
+    db: str
+    paths: AppPaths
+    ok: bool
+    checks: list[Check]
+    server: ServerStatus
+    registrations: list[Registration]
+
+
 def diagnose(
     paths: AppPaths,
     db: str,
     connect: Callable[[str], GitHubClient] = GitHubClient.connect,
     clients: Sequence[McpClient] = CLIENTS,
+    *,
+    offline: bool = False,
 ) -> Iterator[Check]:
-    """Check each part of the setup in turn; only the GitHub check uses the network, with one request."""
+    """Check each part of the setup in turn; only the GitHub check uses the network, with one request, and offline
+    neither it nor Claude Code's connection check, which starts the shared server, runs."""
+    yield from setup_checks(paths, db, connect, offline)
+    manager = managed_by()
+    for listing in listings(clients):
+        yield listing_check(listing, connection=not offline, manager=manager)
+
+
+def diagnosis(
+    paths: AppPaths,
+    db: str,
+    connect: Callable[[str], GitHubClient] = GitHubClient.connect,
+    clients: Sequence[McpClient] = CLIENTS,
+    *,
+    offline: bool = False,
+) -> Diagnosis:
+    manager = managed_by()
+    found = list(listings(clients))
+    checks = [
+        *setup_checks(paths, db, connect, offline),
+        *(listing_check(listing, connection=not offline, manager=manager) for listing in found),
+    ]
+    return Diagnosis(
+        version=__version__,
+        managed_by=manager,
+        db=db,
+        paths=paths,
+        ok=all(check.ok for check in checks),
+        checks=checks,
+        server=server_status(ServerFiles(paths.data_dir, db)),
+        registrations=[_registration(listing.client, entry) for listing in found for entry in listing.entries],
+    )
+
+
+def _registration(client: McpClient, entry: Entry) -> Registration:
+    return Registration(
+        client=client.key,
+        client_name=client.name,
+        name=entry.name,
+        command=list(entry.command),
+        scope=entry.scope,
+        for_every_project=entry.for_every_project,
+        remove=entry.remove,
+    )
+
+
+def setup_checks(
+    paths: AppPaths, db: str, connect: Callable[[str], GitHubClient], offline: bool = False
+) -> Iterator[Check]:
+    """Every check but the clients'."""
     index_file = paths.index_file(db)
     yield vectors_check()
-    yield github_check(connect)
+    yield offline_github_check() if offline else github_check(connect)
     yield config_check(paths.config_file)
     yield from local_documents_checks(paths.config_file)
     yield index_check(index_file)
@@ -77,9 +168,6 @@ def diagnose(
     yield engine_check()
     yield refresh_check(paths.data_dir)
     yield server_check(ServerFiles(paths.data_dir, db))
-    for client in clients:
-        if (check := registration_check(client)) is not None:
-            yield check
 
 
 def vectors_check() -> Check:
@@ -115,6 +203,15 @@ def github_access(connect: Callable[[str], GitHubClient]) -> tuple[Check, TokenI
     if missing := info.missing_scopes:
         return Check("GitHub", False, f"{detail}; missing {', '.join(missing)}", _scope_fix(source, missing)), info
     return Check("GitHub", True, detail), info
+
+
+def offline_github_check() -> Check:
+    """Whether there is a token, without asking GitHub whether it works."""
+    try:
+        resolve_token()
+    except GitHubError as error:
+        return Check("GitHub", False, str(error))
+    return Check("GitHub", True, f"a token from {token_source()}, not checked offline")
 
 
 def _scopes(info: TokenInfo) -> str:
@@ -304,24 +401,45 @@ def refresh_check(data_dir: Path) -> Check:
 
 def server_check(files: ServerFiles) -> Check:
     name = "shared server"
-    if not is_running(files):
+    status = server_status(files)
+    if not status.running:
         return Check(name, True, "not running; the first search starts it")
-    found = read_discovery(files)
-    if found is None:
+    if status.starting:
         return Check(name, True, "starting")
-    replaced = "" if found.version == __version__ else f", which the next session replaces with {__version__}"
-    sessions = _count(connected_relays(files), "session")
-    return Check(name, True, f"pid {found.pid} at {found.url}, repolore {found.version}{replaced}; {sessions}")
+    replaced = "" if status.version == __version__ else f", which the next session replaces with {__version__}"
+    sessions = _count(status.sessions, "session")
+    return Check(name, True, f"pid {status.pid} at {status.url}, repolore {status.version}{replaced}; {sessions}")
 
 
-def registration_check(client: McpClient, *, connection: bool = True) -> Check | None:
-    """What a client that's here has registered; connection=False skips asking it, which can start the shared server."""
+def listings(clients: Sequence[McpClient]) -> Iterator[Listing]:
+    """What each client that's here has registered, one client at a time."""
+    for client in clients:
+        if (found := listing(client)) is not None:
+            yield found
+
+
+def listing(client: McpClient) -> Listing | None:
     if not client.present():
         return None
     try:
-        found = repolore_entries(client)
+        return Listing(client, tuple(repolore_entries(client)))
     except CLIENT_ERRORS as error:
-        return Check(client.name, False, f"can't list its MCP servers: {error}")
+        return Listing(client, error=str(error))
+
+
+def registration_check(client: McpClient, *, connection: bool = True, manager: str | None = None) -> Check | None:
+    """What a client that's here has registered; connection=False skips asking it, which can start the shared server."""
+    found = listing(client)
+    return None if found is None else listing_check(found, connection=connection, manager=manager)
+
+
+def listing_check(listing: Listing, *, connection: bool, manager: str | None) -> Check:
+    """Under an app that manages repolore, any registration is a second setup with its own server and model."""
+    client, found = listing.client, list(listing.entries)
+    if listing.error is not None:
+        return Check(client.name, False, f"can't list its MCP servers: {listing.error}")
+    if manager is not None:
+        return _managed_check(client, found, manager)
     if not found:
         return Check(client.name, True, "repolore isn't registered", client.register, warning=True)
     if len(found) > 1:
@@ -329,10 +447,29 @@ def registration_check(client: McpClient, *, connection: bool = True) -> Check |
     return _entry_check(client, found[0], connection)
 
 
-def _duplicates_check(client: McpClient, found: list[Entry]) -> Check:
-    listed = ", ".join(f"{entry.name} ({entry.scope})" for entry in found)
-    removals = "; ".join(entry.remove for entry in found)
-    return Check(client.name, False, f"repolore is registered {len(found)} times: {listed}", f"keep one: {removals}")
+def _managed_check(client: McpClient, found: Sequence[Entry], manager: str) -> Check:
+    if not found:
+        return Check(client.name, True, f"repolore isn't registered; {manager} gives it to its sessions")
+    which = "this one" if len(found) == 1 else "these"
+    return Check(
+        client.name,
+        False,
+        f"repolore is registered: {_listed(found)}",
+        f"{manager} already gives repolore to its sessions; remove {which}: {_removals(found)}",
+    )
+
+
+def _duplicates_check(client: McpClient, found: Sequence[Entry]) -> Check:
+    detail = f"repolore is registered {len(found)} times: {_listed(found)}"
+    return Check(client.name, False, detail, f"keep one: {_removals(found)}")
+
+
+def _listed(found: Sequence[Entry]) -> str:
+    return ", ".join(f"{entry.name} ({entry.scope})" for entry in found)
+
+
+def _removals(found: Sequence[Entry]) -> str:
+    return "; ".join(entry.remove for entry in found)
 
 
 def _entry_check(client: McpClient, entry: Entry, connection: bool) -> Check:

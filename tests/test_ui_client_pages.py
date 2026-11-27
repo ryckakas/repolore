@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
-from repolore.clients import Entry, McpClient, RegistrationError
+from repolore.clients import MANAGED_ENV, Entry, McpClient, RegistrationError
 from repolore.paths import AppPaths
 from repolore.ui import client_pages
 from repolore.ui.app import create_app
@@ -260,3 +260,62 @@ def test_the_clients_page_shows_the_snippet_and_the_instructions(browser: TestCl
     assert "repolore-mcp" in html
     assert "data-copy" in html
     assert "Searches the user&#39;s own engineering history on GitHub" in html
+
+
+@pytest.fixture
+def managed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(MANAGED_ENV, "Swarmed")
+
+
+@pytest.mark.usefixtures("managed")
+def test_a_managed_page_offers_no_registration(browser: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    here = FakeClient()
+    other = McpClient("other", "Other", lambda: False, here.entries, here.add, "`x`")
+    use(monkeypatch, here.client(), other)
+
+    html = browser.get("/clients/list").text
+
+    assert "repolore isn&#39;t registered; Swarmed gives it to its sessions" in html
+    assert "Register with" not in html
+    assert "Not found" not in html
+
+
+@pytest.mark.usefixtures("managed")
+def test_a_managed_page_lists_a_registration_as_a_conflict_with_its_removal(
+    browser: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(monkeypatch, FakeClient([USER_ENTRY]).client())
+
+    html = browser.get("/clients/list").text
+
+    assert 'class="fail"' in html
+    assert "Swarmed already gives repolore to its sessions; remove this one: `remove user`" in html
+
+
+@pytest.mark.usefixtures("managed")
+def test_a_managed_page_refuses_to_register(browser: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeClient()
+    use(monkeypatch, fake.client())
+
+    response = register(browser)
+
+    assert response.status_code == 400
+    assert "Swarmed gives repolore to its sessions" in response.text
+    assert fake.added == 0
+
+
+@pytest.mark.usefixtures("managed")
+def test_a_managed_page_says_who_manages_it_and_drops_the_snippet(browser: TestClient) -> None:
+    html = browser.get("/clients").text
+
+    assert "managed by Swarmed" in html
+    assert "Swarmed gives repolore to its sessions" in html
+    assert "Any other client" not in html
+    assert "data-copy" not in html
+
+
+def test_an_unmanaged_page_names_no_manager(browser: TestClient) -> None:
+    html = browser.get("/clients").text
+
+    assert "managed by" not in html
+    assert "Any other client" in html

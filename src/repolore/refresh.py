@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import time
 from collections.abc import Generator
@@ -11,6 +10,7 @@ from filelock import Timeout
 from pydantic import BaseModel, Field, ValidationError
 
 from repolore.locks import hold, is_locked, replace_when_free
+from repolore.paths import child_environment
 from repolore.processes import SAFE_PATH, spawn_detached
 from repolore.progress import Phase, Progress, Report
 
@@ -65,6 +65,23 @@ def refreshing(data_dir: Path, interval: float = PROGRESS_SECONDS) -> Generator[
         lock.release()
 
 
+@contextmanager
+def no_refresh(data_dir: Path) -> Generator[None]:
+    """Hold the refresh lock without recording a run, so no refresh starts meanwhile; refuse while one runs or is
+    starting."""
+    if _is_starting(data_dir):
+        raise RefreshRunning("A refresh is starting.")
+    lock = hold(data_dir / LOCK_FILE, timeout=0)
+    try:
+        lock.acquire()
+    except Timeout:
+        raise RefreshRunning("A refresh is running.") from None
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def refresh_status(data_dir: Path) -> RefreshStatus:
     try:
         status = RefreshStatus.model_validate_json((data_dir / STATUS_FILE).read_text(encoding="utf-8"))
@@ -94,7 +111,7 @@ def start_refresh(data_dir: Path, db: str) -> bool:
     command = [sys.executable, *SAFE_PATH, "-m", "repolore", "--data-dir", str(data_dir), "refresh", "--db", db]
     try:
         with (data_dir / LOG_FILE).open("w", encoding="utf-8") as log:
-            spawn_detached(command, stdout=log, env=os.environ, cwd=data_dir)
+            spawn_detached(command, stdout=log, env=child_environment(), cwd=data_dir)
     except OSError:
         request.unlink()
         raise

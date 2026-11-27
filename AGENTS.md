@@ -46,10 +46,13 @@ uv run repolore refresh     # ingest, then build with the index's recorded setti
 uv run repolore session-start  # what the plugin's SessionStart hook runs: a background refresh when the last one
                             # started --hours ago or more (default 12, or the plugin's refresh_hours option)
 uv run repolore search "…"  # best chunks, with --repo, --kind, --author, -k, --mode, --rerank, --distinct
-uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it
-uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail
+uv run repolore server status  # the shared MCP server: pid, address, version, sessions; `server stop` ends it;
+                            # --json for a program
+uv run repolore doctor      # check the setup, each part as a pass, a warning or a fail with its fix; exits 1 on a fail;
+                            # --json prints one object for a program, --offline skips GitHub and `claude mcp get`
 uv run repolore ui          # a local web page with the status, the MCP tools, what's indexed and the clients, until Ctrl-C;
-                            # --no-browser only prints its address
+                            # --no-browser only prints its address, alone on the first line
+uv run repolore copy <dir>  # copy the config and the data into a new home for REPOLORE_HOME, with no refresh running
 uv run repolore setup       # check GitHub, pick the repos for repolore.toml, register the MCP server, start a refresh
                             # (with no flags at all it first offers `ui` instead, default no);
                             # each question has a flag (--include/--exclude/--local-root/--local-pattern, --replace-config,
@@ -117,8 +120,11 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
 
 - `paths.py` resolves the per-user directories through `platformdirs`. Config is
   `%APPDATA%\repolore\repolore.toml` (roaming). Data is `%LOCALAPPDATA%\repolore` (local),
-  holding the raw API cache and the DB files, and `--data-dir` overrides it. **The repo never
-  contains corpus data.** It contains private code, so it stays out of git.
+  holding the raw API cache and the DB files, and `--data-dir` overrides it. `REPOLORE_HOME` puts both in one folder,
+  `repolore.toml` and `evals/questions.yaml` at its top, and `--data-dir` still wins for the data. It's a variable, not a
+  flag, because the relay, the shared server and the refreshes inherit the environment; `child_environment` makes a
+  relative one absolute, since they start in the data dir. `AppPaths` records where each path came from, which
+  `repolore version` prints. **The repo never contains corpus data.** It contains private code, so it stays out of git.
 - `config.py` loads `repolore.toml`: optional `include` / `exclude` globs over `owner/name`, and `local_roots`,
   `checkout_depth`, `local_patterns`, `[[local_folders]]` and `max_local_files` for local documents, and `[[branches]]`,
   each a `repo` glob with the `patterns` of the branches whose commits are read besides the default one. Without a file,
@@ -256,7 +262,19 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   writes to `refresh.log` and outlives the session, so the server loads no second model and blocks no worker thread.
   `repolore session-start` starts the same detached refresh when `refresh_due` says so: the index is built and the
   last refresh, whatever its outcome, started at least `--hours` ago. A hook can't run `repolore refresh` itself:
-  Claude Code kills an async hook's process when the session ends.
+  Claude Code kills an async hook's process when the session ends. `no_refresh` holds the lock without recording a run,
+  for `repolore copy`, and refuses while a refresh runs or was requested in the last `STARTUP_SECONDS`.
+- `copying.py` is `repolore copy <folder>`, which makes a new home for an app that will manage repolore. It refuses a
+  folder that isn't empty or is inside the home, holds `no_refresh` for the whole copy, copies every `.db` with SQLite's
+  backup API from a read-only connection (consistent while the shared server reads it), and clones the rest where the
+  file system can: `clonefile` through ctypes on macOS, the `FICLONE` ioctl on Linux, a plain copy elsewhere or when the
+  clone fails. It leaves behind the files that are a database's `-wal`, `-shm` or `-journal`, a lock, `.tmp` or
+  `.partial`, and at the data dir's top only the shared server's `server-*` files (its token among them), the relays'
+  `clients/` and a pending refresh request: below it, the raw cache's folders are named after GitHub owners and repos,
+  which can look like any of these. The settings come from where they're read, not from the data dir. A failure removes
+  the folder it made, or empties the one it was given, and turns `copytree`'s list of failed files into one line; no
+  file of the old home changes, though SQLite's read-only connection may add the empty `-wal` and the `-shm` that any
+  reader of a WAL database adds.
 - `processes.py` starts those detached processes, the refresh and the shared server, in the data dir and with
   `python -P`, so the session's project directory is neither locked nor on their import path. On Windows, Claude Code
   stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
@@ -271,7 +289,12 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   without starting a server: Claude Code's user, local and project scopes plus `claude plugin list --json`, and the
   other clients' user files and those in the current folder. One registration is checked with `claude mcp get` on
   Claude Code, which starts the server; other clients can't be checked. More than one fails, naming each and how to
-  remove it. A client without repolore warns.
+  remove it. A client without repolore warns. `--offline` checks only that there is a token and skips `claude mcp get`.
+  `--json` prints `diagnosis`'s `Diagnosis`, which lists each client once (`Listing`) for both its check and its
+  registrations, adds `server_state.server_status` (never the token) and keeps the exit code. Under
+  `REPOLORE_MANAGED_BY=<app>` (`clients.managed_by`), the app gives repolore to its own sessions, so any registration
+  is a second setup: it fails with its removal, a client without one passes, `setup` registers none, and the `ui`'s
+  Clients page shows no Register button, refuses the POST and hides the snippet for other clients.
 - `ui/app.py` is `repolore ui`: Starlette routes with Jinja templates (autoescaped) and one static script, served by
   its own uvicorn on 127.0.0.1, port 0, until Ctrl-C. It isn't part of the shared server, whose custom routes get no
   auth or Host check from the SDK and which would need a heartbeat for an open page. It loads no model, about 56 MB, and
@@ -360,4 +383,6 @@ bag-of-words stand-in. Fixtures in
 `tests/fixtures/` come from **public repos only**, because this repo is public; never copy data from a
 private repo into it. Anything that
 calls a real API is marked `@pytest.mark.live`, which is deselected unless run with `-m live`.
+An autouse fixture in `tests/conftest.py` clears `REPOLORE_HOME` and `REPOLORE_MANAGED_BY`, so a shell or an app that
+sets them can't change what a test sees.
 Retrieval quality is measured by the eval harness (`repolore eval`), not by unit tests.

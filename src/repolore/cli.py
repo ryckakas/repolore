@@ -2,6 +2,7 @@ import hashlib
 import io
 import logging
 import random
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -20,10 +21,11 @@ from pydantic import ValidationError
 
 from repolore import __version__
 from repolore.chunking import Chunk, chunk_document, chunk_limit, count_split_sections
-from repolore.clients import CLIENTS, McpClient, RegistrationError, named_clients, repolore_entries
+from repolore.clients import CLIENTS, McpClient, RegistrationError, managed_by, named_clients, repolore_entries
 from repolore.config import Config, load_config
+from repolore.copying import CopyError, copy_home
 from repolore.discovery import discover
-from repolore.doctor import diagnose, github_access
+from repolore.doctor import Listing, diagnose, diagnosis, github_access, listings
 from repolore.documents import Document, DocumentKind
 from repolore.embedding import ModelUnavailableError
 from repolore.embedding.engines import build_engine
@@ -42,13 +44,13 @@ from repolore.evals.runs import previous_run, run_record, save_run
 from repolore.indexing import BuildSettings, build_index
 from repolore.ingest import OutdatedCacheError, cached_documents
 from repolore.ingest import ingest as ingest_repos
-from repolore.paths import AppPaths, resolve_paths
+from repolore.paths import HOME_ENV, AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report, ignore
 from repolore.refresh import LOG_FILE, RefreshRunning, refresh_due, refreshing, start_refresh
 from repolore.reranking import CrossEncoderReranker
 from repolore.retrieval import Mode
 from repolore.retrieval import search as search_index
-from repolore.server_state import ServerFiles, connected_relays, is_running, read_discovery
+from repolore.server_state import ServerFiles, is_running, server_status
 from repolore.setup import (
     ALL,
     PLANS_PATTERN,
@@ -110,8 +112,8 @@ def version(ctx: typer.Context) -> None:
 
 def _print_version(paths: AppPaths) -> None:
     typer.echo(f"repolore {__version__}")
-    typer.echo(f"config: {paths.config_file}")
-    typer.echo(f"data:   {paths.data_dir}")
+    typer.echo(f"config: {paths.config_file} ({paths.config_from})")
+    typer.echo(f"data:   {paths.data_dir} ({paths.data_from})")
 
 
 @app.command()
@@ -284,6 +286,7 @@ IndexOption = Annotated[str, typer.Option("--db", help="Name of the index to use
 ModeOption = Annotated[Mode, typer.Option(help="Vector (meaning), keyword (BM25) or hybrid (both, fused by rank).")]
 RerankOption = Annotated[bool, typer.Option(help="Rerank the top 50 candidates with a local cross-encoder.")]
 DistinctOption = Annotated[bool, typer.Option(help="Return at most one chunk per source URL.")]
+JsonOption = Annotated[bool, typer.Option("--json", help="Print one JSON object for another program instead.")]
 SEARCH_ERRORS = (StoreError, UnknownModelError, ModelUnavailableError)
 
 
@@ -388,20 +391,66 @@ def _recorded_settings(index_file: Path) -> BuildSettings:
 
 
 @app.command()
-def doctor(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
+def doctor(
+    ctx: typer.Context,
+    db: IndexOption = DEFAULT_INDEX,
+    as_json: JsonOption = False,
+    offline: Annotated[
+        bool, typer.Option(help="Skip the GitHub request and Claude Code's connection check, which starts repolore.")
+    ] = False,
+) -> None:
     """Check the setup and say how to fix what's wrong: sqlite-vec, GitHub access, repolore.toml, local documents,
     the index, the model, the last refresh, the shared server and the MCP clients that have repolore registered.
 
-    Exits with 1 when a check fails. It makes one GitHub request, and Claude Code starts repolore to check it.
+    Exits with 1 when a check fails. It makes one GitHub request, and Claude Code starts repolore to check it, unless
+    --offline. --json adds the shared server and every registration found, with how to remove each.
     """
     paths: AppPaths = ctx.obj
-    _print_version(paths)
-    failed = False
-    for check in diagnose(paths, db):
-        typer.echo(str(check))
-        failed |= not check.ok
+    if as_json:
+        found = diagnosis(paths, db, offline=offline)
+        typer.echo(found.model_dump_json(indent=2))
+        failed = not found.ok
+    else:
+        _print_version(paths)
+        failed = False
+        for check in diagnose(paths, db, offline=offline):
+            typer.echo(str(check))
+            failed |= not check.ok
     if failed:
         raise typer.Exit(1)
+
+
+@app.command()
+def copy(
+    ctx: typer.Context,
+    folder: Annotated[Path, typer.Argument(help="A new or empty folder for the copy.")],
+) -> None:
+    """Copy the config and the data into a new home, which then works with REPOLORE_HOME=<folder>.
+
+    It refuses while a refresh runs and keeps any from starting until it's done; the shared server and its sessions
+    can stay connected. It clones files where the file system can, so the model takes no extra space. A failed copy
+    removes what it copied, and the home it copies from is never changed.
+    """
+    paths: AppPaths = ctx.obj
+    typer.echo(f"Copying {paths.config_file} and {paths.data_dir} to {folder}…")
+    with _exit_on(CopyError, RefreshRunning, OSError, sqlite3.Error):
+        copied = copy_home(paths, folder)
+    clones = f", {copied.cloned} of them as clones" if copied.cloned else ""
+    typer.echo(f"Copied {copied.files} files{clones}. Use it with {HOME_ENV}={copied.target}.")
+    _print_old_registrations(list(listings(CLIENTS)))
+
+
+def _print_old_registrations(found: list[Listing]) -> None:
+    entries = [(listing.client.name, entry) for listing in found for entry in listing.entries]
+    if not entries:
+        typer.echo("No MCP client has repolore registered.")
+    else:
+        typer.echo("These registrations start repolore with the home it copied; remove them so only one setup runs:")
+    for client, entry in entries:
+        typer.echo(f"  {client}, {entry.name} ({entry.scope}): {entry.remove}")
+    for listing in found:
+        if listing.error is not None:
+            typer.echo(f"  {listing.client.name}: can't list its MCP servers: {listing.error}")
 
 
 @app.command()
@@ -410,7 +459,10 @@ def ui(
     browser: Annotated[bool, typer.Option(help="Open the page in the default browser.")] = True,
     db: IndexOption = DEFAULT_INDEX,
 ) -> None:
-    """Show repolore's status, set it up and search in a local web page, until Ctrl-C."""
+    """Show repolore's status, set it up and search in a local web page, until Ctrl-C.
+
+    With --no-browser the first line is the page's address alone, for a program to read; it holds this run's token.
+    """
     _serve_page(ctx.obj, db, browser)
 
 
@@ -423,10 +475,12 @@ def _serve_page(paths: AppPaths, db: str, browser: bool) -> None:
 
 
 def _page_ready(address: str, browser: bool) -> None:
+    if not browser:
+        typer.echo(f"{address}\nThat's repolore's page; Ctrl-C stops it.")
+        return
     typer.echo(f"repolore's page is at {address}\nCtrl-C stops it.")
-    if browser:
-        # On a thread, because a console browser, the only one a machine with no display has, blocks until it's closed.
-        threading.Thread(target=webbrowser.open, args=(address,), daemon=True).start()
+    # On a thread, because a console browser, the only one a machine with no display has, blocks until it's closed.
+    threading.Thread(target=webbrowser.open, args=(address,), daemon=True).start()
 
 
 @app.command()
@@ -463,7 +517,8 @@ def setup(
     it finds and start the first refresh.
 
     Each question has a flag that answers it; --include, --exclude, --local-root and --local-pattern together answer the
-    repo picking. With no flags at all, it first offers the local web page instead of the questions.
+    repo picking. With no flags at all, it first offers the local web page instead of the questions. Under an app that
+    sets REPOLORE_MANAGED_BY, it registers no client, as with --no-register.
     """
     paths: AppPaths = ctx.obj
     _print_version(paths)
@@ -483,6 +538,9 @@ def setup(
         require_roots_with_patterns(roots, patterns)
     chosen = Config(include=include or [], exclude=exclude or [], local_roots=roots, local_patterns=patterns)
     _setup_config(paths.config_file, None if chosen == Config() else chosen, replace_config)
+    if manager := managed_by():
+        typer.echo(f"{manager} gives repolore to its sessions, so no MCP client is registered.")
+        register_clients = False
     registered = _setup_clients(register_clients, named)
     _setup_refresh(paths.data_dir, db, first_refresh)
     if not registered:
@@ -766,18 +824,19 @@ def server_run(
 
 
 @server_app.command("status")
-def server_status(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX) -> None:
+def server_state(ctx: typer.Context, db: IndexOption = DEFAULT_INDEX, as_json: JsonOption = False) -> None:
     """Show whether the shared server runs, where, which version and how many sessions use it."""
     files = _server_files(ctx, db)
-    if not is_running(files):
+    status = server_status(files)
+    if as_json:
+        typer.echo(status.model_dump_json(indent=2))
+    elif not status.running:
         typer.echo(f"No shared server for {db} is running.")
-        return
-    found = read_discovery(files)
-    if found is None:
+    elif status.starting:
         typer.echo(f"The shared server for {db} is starting.")
-        return
-    typer.echo(f"Running since {found.started_at}: pid {found.pid}, {found.url}, repolore {found.version}.")
-    typer.echo(f"Sessions connected: {connected_relays(files)}. Log: {files.log}")
+    else:
+        typer.echo(f"Running since {status.started_at}: pid {status.pid}, {status.url}, repolore {status.version}.")
+        typer.echo(f"Sessions connected: {status.sessions}. Log: {files.log}")
 
 
 @server_app.command("stop")

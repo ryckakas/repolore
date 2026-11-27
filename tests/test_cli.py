@@ -18,20 +18,20 @@ from typer.testing import CliRunner, Result
 from repolore import __version__, cli, relay, shared_server
 from repolore.chunking import Chunk
 from repolore.cli import MISS_HITS, PLUGIN_REFRESH_HOURS, app
-from repolore.clients import PLUGIN_SERVER, Entry, McpClient, RegistrationError
+from repolore.clients import MANAGED_ENV, PLUGIN_SERVER, Entry, McpClient, RegistrationError
 from repolore.config import Config, load_config
 from repolore.discovery import Discovery, RepoSource, Scope
-from repolore.doctor import Check
+from repolore.doctor import Check, Diagnosis
 from repolore.documents import Document
 from repolore.embedding import ModelUnavailableError
 from repolore.embedding.engines import EngineChoice
 from repolore.embedding.local import VOYAGE_NANO, LocalModel, onnx_engine
 from repolore.ingest import OutdatedCacheError
 from repolore.locks import hold
-from repolore.paths import AppPaths, resolve_paths
+from repolore.paths import HOME_ENV, AppPaths, resolve_paths
 from repolore.progress import Phase, Progress, Report
 from repolore.refresh import refresh_status, refreshing
-from repolore.server_state import ServerFiles, registered
+from repolore.server_state import ServerFiles, ServerStatus, registered
 from repolore.setup import PLANS_PATTERN
 from repolore.sources.github import GitHubClient, GitHubError, TokenInfo
 from repolore.sources.local_docs import LocalFiles
@@ -53,10 +53,13 @@ def test_version_prints_version_and_default_paths() -> None:
     assert f"data:   {defaults.data_dir}" in result.output
 
 
-def fake_diagnose(checks: list[Check]) -> Callable[[AppPaths, str], Iterator[Check]]:
-    def diagnose(paths: AppPaths, db: str) -> Iterator[Check]:
+def fake_diagnose(checks: list[Check], offline: bool = False) -> Callable[..., Iterator[Check]]:
+    def diagnose(paths: AppPaths, db: str, *, offline: bool) -> Iterator[Check]:
         assert db == "other"
+        assert offline is expected_offline
         yield from checks
+
+    expected_offline = offline
 
     return diagnose
 
@@ -95,7 +98,66 @@ def test_data_dir_option_overrides_data_path(tmp_path: Path) -> None:
     result = runner.invoke(app, ["--data-dir", str(tmp_path), "version"])
 
     assert result.exit_code == 0
-    assert f"data:   {tmp_path.resolve()}" in result.output
+    assert f"data:   {tmp_path.resolve()} (--data-dir)" in result.output
+    assert "(default)" in result.output
+
+
+def test_version_says_where_each_path_came_from(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(HOME_ENV, str(tmp_path))
+
+    result = runner.invoke(app, ["version"])
+
+    assert result.output.splitlines()[1:] == [
+        f"config: {tmp_path.resolve() / 'repolore.toml'} (REPOLORE_HOME)",
+        f"data:   {tmp_path.resolve()} (REPOLORE_HOME)",
+    ]
+
+
+def test_doctor_offline_tells_the_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "diagnose", fake_diagnose([Check("index", True, "12 chunks")], offline=True))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "doctor", "--db", "other", "--offline"])
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[3:] == ["✓ index: 12 chunks"]
+
+
+def fake_diagnosis(ok: bool, calls: list[tuple[str, bool]]) -> Callable[..., Diagnosis]:
+    def diagnosis(paths: AppPaths, db: str, *, offline: bool) -> Diagnosis:
+        calls.append((db, offline))
+        return Diagnosis(
+            version=__version__,
+            managed_by="Swarmed",
+            db=db,
+            paths=paths,
+            ok=ok,
+            checks=[Check("index", ok, "12 chunks" if ok else "none", None if ok else "run `repolore refresh`")],
+            server=ServerStatus(running=False),
+            registrations=[],
+        )
+
+    return diagnosis
+
+
+@pytest.mark.parametrize(("ok", "exit_code"), [(True, 0), (False, 1)])
+def test_doctor_json_prints_the_report_alone_and_keeps_the_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ok: bool, exit_code: int
+) -> None:
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(cli, "diagnosis", fake_diagnosis(ok, calls))
+    monkeypatch.setattr(cli, "diagnose", lambda *_, **__: pytest.fail("the checks ran twice"))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "doctor", "--json", "--offline", "--db", "other"])
+
+    assert result.exit_code == exit_code
+    printed = json.loads(result.stdout)
+    assert calls == [("other", True)]
+    assert printed["ok"] is ok
+    assert printed["managed_by"] == "Swarmed"
+    assert printed["paths"]["data_dir"] == str(tmp_path.resolve())
+    assert printed["paths"]["data_from"] == "--data-dir"
+    assert printed["checks"][0]["name"] == "index"
+    assert printed["server"]["running"] is False
 
 
 def test_no_command_shows_help() -> None:
@@ -1106,6 +1168,16 @@ def test_ui_prints_the_address_and_says_how_to_stop(
     assert "Stopped." in result.output
 
 
+def test_ui_without_a_browser_prints_the_address_alone_first(
+    tmp_path: Path, ui_serve: list[tuple[Path, str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli.webbrowser, "open", lambda _: pytest.fail("a browser opened"))
+
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "ui", "--no-browser"])
+
+    assert result.output.splitlines()[0] == "http://127.0.0.1:1/?token=t"
+
+
 def test_ui_opens_the_browser_at_that_address(
     tmp_path: Path, ui_serve: list[tuple[Path, str]], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1144,6 +1216,27 @@ def test_server_status_shows_where_it_runs_and_who_uses_it(shared_server: Shared
     assert result.exit_code == 0
     assert f"pid {found.pid}, {found.url}, repolore {found.version}" in result.output
     assert "Sessions connected: 1." in result.output
+    assert found.token not in result.output
+
+
+def test_server_status_json_says_a_server_isnt_running(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["--data-dir", str(tmp_path), "server", "status", "--json"])
+
+    assert result.exit_code == 0
+    printed = json.loads(result.stdout)
+    assert (printed["running"], printed["pid"], printed["sessions"]) == (False, None, 0)
+
+
+def test_server_status_json_says_where_it_runs_without_its_token(shared_server: SharedServer) -> None:
+    found = shared_server.start()
+
+    with registered(shared_server.files):
+        result = runner.invoke(app, ["--data-dir", str(shared_server.files.data_dir), "server", "status", "--json"])
+
+    printed = json.loads(result.stdout)
+    assert (printed["running"], printed["starting"]) == (True, False)
+    assert (printed["pid"], printed["url"], printed["version"]) == (found.pid, found.url, found.version)
+    assert printed["sessions"] == 1
     assert found.token not in result.output
 
 
@@ -1694,6 +1787,21 @@ def test_setup_without_registering_doesnt_check_the_clients(tmp_path: Path, monk
     assert run.refreshes
 
 
+@pytest.mark.parametrize("flags", [[], ["--register", "--clients", "claude"]])
+def test_setup_under_a_managing_app_registers_no_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: list[str]
+) -> None:
+    monkeypatch.setenv(MANAGED_ENV, "Swarmed")
+    run = setup_run(tmp_path, monkeypatch, found={"Claude Code": AssertionError("listed")})
+
+    result = runner.invoke(app, ["setup", "--include", "me/*", "--refresh", *flags])
+
+    assert result.exit_code == 0, result.output
+    assert run.registered == []
+    assert "Swarmed gives repolore to its sessions, so no MCP client is registered." in result.output
+    assert run.refreshes
+
+
 def test_setup_asks_before_registering_and_refreshing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = setup_run(tmp_path, monkeypatch)
 
@@ -1727,3 +1835,81 @@ def test_setup_fails_when_the_refresh_cant_start(tmp_path: Path, monkeypatch: py
 
     assert result.exit_code == 1
     assert "can't start python" in result.output
+
+
+@pytest.fixture
+def old_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corpus: list[Chunk]) -> Path:
+    home = tmp_path / "old"
+    monkeypatch.setenv(HOME_ENV, str(home))
+    with closing(connect(home / "db" / "default.db")) as index:
+        embedder = FakeEmbedder()
+        vectors = embedder.embed_documents([chunk.embedded_text for chunk in corpus])
+        write_index(index, corpus, vectors, embedder.model_id, embedder.dim)
+    (home / "repolore.toml").write_text('include = ["octo/*"]\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "CLIENTS", ())
+    return home
+
+
+def test_copy_makes_a_home_that_works_with_repolore_home(
+    old_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    new = tmp_path / "new"
+
+    result = runner.invoke(app, ["copy", str(new)])
+
+    assert result.exit_code == 0, result.output
+    assert f"Use it with REPOLORE_HOME={new.resolve()}." in result.output
+    assert "No MCP client has repolore registered." in result.output
+    monkeypatch.setenv(HOME_ENV, str(new))
+    monkeypatch.setattr(cli, "embedder_for", lambda *_: FakeEmbedder())
+    found = runner.invoke(app, ["search", "solar battery"])
+    assert "octo/repo" in found.output
+    assert load_config(new / "repolore.toml").include == ["octo/*"]
+
+
+def test_copy_lists_the_registrations_that_start_the_old_home(
+    old_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable() -> list[Entry]:
+        raise RegistrationError("bad toml")
+
+    monkeypatch.setattr(
+        cli,
+        "CLIENTS",
+        (
+            McpClient("claude", "Claude Code", lambda: True, lambda: [USER_ENTRY], lambda: "", "x"),
+            McpClient("codex", "Codex", lambda: True, unreadable, lambda: "", "x"),
+            McpClient("zed", "Zed", lambda: False, lambda: pytest.fail("listed"), lambda: "", "x"),
+        ),
+    )
+
+    result = runner.invoke(app, ["copy", str(tmp_path / "new")])
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[-3:] == [
+        "These registrations start repolore with the home it copied; remove them so only one setup runs:",
+        "  Claude Code, repolore (user): x",
+        "  Codex: can't list its MCP servers: bad toml",
+    ]
+
+
+def test_copy_into_a_folder_that_isnt_empty_fails_in_one_line(old_home: Path, tmp_path: Path) -> None:
+    (tmp_path / "taken").mkdir()
+    (tmp_path / "taken" / "notes.md").touch()
+
+    result = runner.invoke(app, ["copy", str(tmp_path / "taken")])
+
+    assert result.exit_code == 1
+    assert (
+        result.output.splitlines()[-1]
+        == f"{(tmp_path / 'taken').resolve()} isn't empty; copy into a new or empty folder."
+    )
+
+
+def test_copy_while_a_refresh_runs_fails_and_copies_nothing(old_home: Path, tmp_path: Path) -> None:
+    with refreshing(old_home):
+        result = runner.invoke(app, ["copy", str(tmp_path / "new")])
+
+    assert result.exit_code == 1
+    assert "A refresh is running." in result.output
+    assert not (tmp_path / "new").exists()

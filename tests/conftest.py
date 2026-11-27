@@ -13,15 +13,23 @@ import pytest
 
 from repolore import shared_server as shared_server_module
 from repolore.chunking import Chunk, chunk_document
+from repolore.clients import MANAGED_ENV
 from repolore.documents import Document, DocumentKind, Visibility
 from repolore.embedding import Vectors
-from repolore.paths import AppPaths
+from repolore.paths import HOME_ENV, AppPaths
 from repolore.progress import Report, ignore
 from repolore.server_state import Discovery, ServerFiles, is_running, read_discovery, request_stop
 from repolore.shared_server import run_shared
 from repolore.store import connect, write_index
 
 FAKE_DIM = 64
+
+
+@pytest.fixture(autouse=True)
+def unmanaged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test starts from the platform's folders and no managing app, whatever the shell running it sets."""
+    monkeypatch.delenv(HOME_ENV, raising=False)
+    monkeypatch.delenv(MANAGED_ENV, raising=False)
 
 
 class FakeEmbedder:

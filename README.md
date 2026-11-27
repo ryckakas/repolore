@@ -240,6 +240,39 @@ so they pass as "connection not checked".
 
 </details>
 
+<details>
+<summary><b>One home folder, a copy of it, and an app that manages repolore</b></summary>
+
+`REPOLORE_HOME=<folder>` keeps everything in one folder: `repolore.toml` and `evals/questions.yaml` at its top and the
+data beside them. Without it, the config and the data follow the platform's conventions, which on Linux and Windows
+are two folders. `--data-dir` still wins for the data. The relay, the shared server and the refreshes inherit the
+variable, and `repolore version` prints where each path came from.
+
+`repolore copy <folder>` copies the config and the data into a new or empty folder, which then works as
+`REPOLORE_HOME=<folder>`. It refuses while a refresh runs and keeps one from starting until it's done; sessions and the
+shared server can stay connected. The index and the embedding cache are copied with SQLite's backup API, so the copies
+are consistent while the server reads them, and the rest is cloned where the file system can (APFS, Btrfs, XFS), so
+the model takes no extra space. A failed copy removes what it copied, and no file of the old home changes. At the end
+it lists the client registrations, which still start repolore with the old home, and how to remove each.
+
+For another program:
+
+- `repolore doctor --json` prints one object: the version, the paths and where they came from, every check, the
+  shared server, and every registration found, with its client, command, scope and how to remove it. The exit code
+  stays 1 when a check fails. `--offline` skips the GitHub request and Claude Code's connection check, which starts
+  repolore.
+- `repolore server status --json` says whether the shared server runs, its pid, version and address (never its
+  token), and how many sessions are connected.
+- `repolore ui --no-browser` prints the page's address alone on its first line. It holds the run's token, so don't
+  log it.
+
+An app that gives repolore to its own sessions sets `REPOLORE_MANAGED_BY=<app>`. Then a registration in any client is
+a second setup, with its own server and copy of the model: `repolore doctor` fails on each one and names how to remove
+it, `repolore setup` registers no client, and `repolore ui`'s Clients page lists registrations as conflicts and offers
+no Register button.
+
+</details>
+
 ## MCP clients
 
 `repolore-mcp` is a standard stdio MCP server. `repolore setup` offers to register it, for every project, with each of
@@ -362,9 +395,10 @@ or `required = true` on this server, to wait for the startup timeout instead.
 
 Codex gives a server only a short list of environment variables: `PATH`, the home, app data and temp folders, and a
 few more. That's enough for `gh auth token` (checked on Windows). If you rely on `REPOLORE_GITHUB_TOKEN`,
-`HTTPS_PROXY`, `REPOLORE_DEVICE` or an `XDG_*` directory, list it in `env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay
-finds its folders through `XDG_*`, and the shared server, which every client's sessions share, and the refreshes it
-starts inherit the environment of whichever session started it.
+`HTTPS_PROXY`, `REPOLORE_DEVICE`, `REPOLORE_HOME` or an `XDG_*` directory, list it in
+`env_vars = ["REPOLORE_GITHUB_TOKEN"]`. The relay finds its folders through `REPOLORE_HOME` or `XDG_*`, and the shared
+server, which every client's sessions share, and the refreshes it starts inherit the environment of whichever session
+started it.
 
 </details>
 

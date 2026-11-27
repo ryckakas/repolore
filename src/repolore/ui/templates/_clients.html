@@ -21,6 +21,6 @@
 {% else %}
 <p class="muted">No MCP client was found on this machine.</p>
 {% endif %}
-{% if missing %}
+{% if missing and not managed_by %}
 <p class="hint">Not found: {{ missing | join(", ") }}. Install one and reload this page.</p>
 {% endif %}

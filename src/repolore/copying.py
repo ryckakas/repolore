@@ -1,0 +1,180 @@
+import ctypes
+import fnmatch
+import os
+import shutil
+import sqlite3
+import sys
+from collections.abc import Callable
+from contextlib import AbstractContextManager, closing, nullcontext
+from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+
+from repolore.paths import CONFIG_FILENAME, QUESTIONS_FILENAME, AppPaths
+from repolore.refresh import REQUEST_FILE, no_refresh
+
+DATABASE_SUFFIX = ".db"
+# A database's journal and WAL are part of it only to SQLite, which the backup asks; a lock, an unfinished download and
+# a half-written status belong to the processes of the home being copied. Files only, because the raw cache's folders
+# are named after GitHub owners and repos, which can look like any of these.
+LEFT_BEHIND_FILES = ("*-wal", "*-shm", "*-journal", "*.lock", "*.tmp", "*.partial")
+# For the same reason only at the top of the data dir: the shared server's address and token, the relays' locks in
+# clients/<db>/, and a pending refresh request.
+LEFT_BEHIND_AT_TOP = ("server-*", "clients", REQUEST_FILE)
+EVALS_FOLDER = "evals"
+# From <sys/ioctl.h> on Linux: _IOW(0x94, 9, int).
+FICLONE = 0x40049409
+
+
+class CopyError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class Copied:
+    target: Path
+    files: int
+    cloned: int
+
+
+def copy_home(paths: AppPaths, target: Path) -> Copied:
+    """Copy the config and the data into an empty folder that REPOLORE_HOME can then name, holding the refresh lock so
+    no refresh writes meanwhile. The databases are copied with SQLite's backup API, which a reader holding them open
+    doesn't disturb, and the rest is cloned where the file system can. A failed copy removes what it copied; no file of
+    the home being copied changes."""
+    target = target.expanduser().resolve()
+    _check_target(target, paths.data_dir)
+    created = not target.exists()
+    counter = _Counter()
+    with _refreshes_held(paths.data_dir):
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            if paths.data_dir.is_dir():
+                _copy_data(paths.data_dir, target, counter)
+            _copy_setting(paths.config_file, target / CONFIG_FILENAME, counter)
+            _copy_setting(paths.questions_file, target / EVALS_FOLDER / QUESTIONS_FILENAME, counter)
+        except BaseException:
+            _remove_copy(target, created)
+            raise
+    return Copied(target, counter.files, counter.cloned)
+
+
+def _check_target(target: Path, data_dir: Path) -> None:
+    if target == data_dir or target.is_relative_to(data_dir):
+        raise CopyError(f"{target} is inside the home it would copy, {data_dir}.")
+    if target.exists() and not target.is_dir():
+        raise CopyError(f"{target} isn't a folder.")
+    if target.exists() and any(target.iterdir()):
+        raise CopyError(f"{target} isn't empty; copy into a new or empty folder.")
+
+
+def _refreshes_held(data_dir: Path) -> AbstractContextManager[None]:
+    # Without a data dir there's nothing a refresh could be writing, and taking the lock would create the folder.
+    return no_refresh(data_dir) if data_dir.is_dir() else nullcontext()
+
+
+class _Counter:
+    def __init__(self) -> None:
+        self.files = 0
+        self.cloned = 0
+
+    def copy(self, source: str, target: str) -> str:
+        if source.endswith(DATABASE_SUFFIX):
+            back_up(Path(source), Path(target))
+        elif clone_or_copy(Path(source), Path(target)):
+            self.cloned += 1
+        self.files += 1
+        return target
+
+
+def _copy_data(data_dir: Path, target: Path, counter: _Counter) -> None:
+    left_behind = partial(_left_behind, data_dir)
+    try:
+        shutil.copytree(data_dir, target, ignore=left_behind, copy_function=counter.copy, dirs_exist_ok=True)
+    except shutil.Error as error:
+        raise CopyError(_failures(error)) from error
+
+
+def _failures(error: shutil.Error) -> str:
+    """copytree goes on past a file it can't copy and raises them all at the end, one per file on a full disk."""
+    failures: list[tuple[str, str, str]] = error.args[0]
+    source, _, reason = failures[0]
+    count = f"{len(failures)} file{'' if len(failures) == 1 else 's'}"
+    return f"Couldn't copy {count}, the first {source}: {reason}"
+
+
+def _left_behind(data_dir: Path, folder: str, names: list[str]) -> set[str]:
+    """What copytree skips in a folder; the settings too, which come from where they're read, not the data dir."""
+    here = Path(folder)
+    left = {name for name in names if _matches(name, LEFT_BEHIND_FILES) and (here / name).is_file()}
+    if here == data_dir:
+        left |= {name for name in names if name == CONFIG_FILENAME or _matches(name, LEFT_BEHIND_AT_TOP)}
+    elif here == data_dir / EVALS_FOLDER and QUESTIONS_FILENAME in names:
+        left.add(QUESTIONS_FILENAME)
+    return left
+
+
+def _matches(name: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+
+
+def _copy_setting(source: Path, target: Path, counter: _Counter) -> None:
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        counter.copy(str(source), str(target))
+
+
+def back_up(source: Path, target: Path) -> None:
+    """A consistent copy of a database, even while another process reads or writes it; read-only, so a hot journal
+    left in the source is never rolled back there."""
+    with (
+        closing(sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)) as old,
+        closing(sqlite3.connect(target)) as new,
+    ):
+        old.backup(new)
+
+
+def clone_or_copy(source: Path, target: Path) -> bool:
+    """Clone a file where the file system can (APFS, Btrfs, XFS), so the copy takes no space until one side changes,
+    and copy it where it can't; True when it was cloned."""
+    try:
+        _clone(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+        return False
+    shutil.copystat(source, target)
+    return True
+
+
+def _clone(source: Path, target: Path) -> None:
+    if sys.platform == "darwin":
+        _clonefile(source, target)
+    elif sys.platform == "linux":
+        _ficlone(source, target)
+    else:
+        raise OSError(f"no file clones on {sys.platform}")
+
+
+def _clonefile(source: Path, target: Path) -> None:
+    clonefile: Callable[[bytes, bytes, int], int] = ctypes.CDLL(None, use_errno=True).clonefile
+    if clonefile(os.fsencode(source), os.fsencode(target), 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(source))
+
+
+def _ficlone(source: Path, target: Path) -> None:
+    import fcntl
+
+    with source.open("rb") as original, target.open("wb") as clone:
+        fcntl.ioctl(clone.fileno(), FICLONE, original.fileno())
+
+
+def _remove_copy(target: Path, created: bool) -> None:
+    if created:
+        shutil.rmtree(target, ignore_errors=True)
+        return
+    for child in target.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
