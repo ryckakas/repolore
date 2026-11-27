@@ -268,11 +268,13 @@ The plan is in `.plans/initial-build/plan.md`, which is local and gitignored. It
   folder that isn't empty or is inside the home, holds `no_refresh` for the whole copy, copies every `.db` with SQLite's
   backup API from a read-only connection (consistent while the shared server reads it), and clones the rest where the
   file system can: `clonefile` through ctypes on macOS, the `FICLONE` ioctl on Linux, a plain copy elsewhere or when the
-  clone fails. It leaves behind the databases' `-wal`, `-shm` and `-journal`, every lock, `.tmp` and `.partial`, the
-  shared server's `server-*` files (its token among them), the relays' `clients/` and a pending refresh request. The
-  settings come from where they're read, not from the data dir. A failure removes the folder it made, or empties the
-  one it was given, and no file of the old home changes; SQLite's read-only connection may add the empty `-wal` and the
-  `-shm` that any reader of a WAL database adds.
+  clone fails. It leaves behind the files that are a database's `-wal`, `-shm` or `-journal`, a lock, `.tmp` or
+  `.partial`, and at the data dir's top only the shared server's `server-*` files (its token among them), the relays'
+  `clients/` and a pending refresh request: below it, the raw cache's folders are named after GitHub owners and repos,
+  which can look like any of these. The settings come from where they're read, not from the data dir. A failure removes
+  the folder it made, or empties the one it was given, and turns `copytree`'s list of failed files into one line; no
+  file of the old home changes, though SQLite's read-only connection may add the empty `-wal` and the `-shm` that any
+  reader of a WAL database adds.
 - `processes.py` starts those detached processes, the refresh and the shared server, in the data dir and with
   `python -P`, so the session's project directory is neither locked nor on their import path. On Windows, Claude Code
   stops a session's server with `taskkill /T /F`, which kills every process still linked to it by parent PID,
