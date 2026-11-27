@@ -258,6 +258,22 @@ def test_a_copy_that_fails_at_the_end_empties_the_folder_it_was_given(
     assert list((tmp_path / "empty").iterdir()) == []
 
 
+def test_files_that_cant_be_copied_are_one_error_and_the_copy_is_removed(
+    home: AppPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def full(source: Path, target: Path) -> bool:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(copying, "clone_or_copy", full)
+
+    with pytest.raises(
+        CopyError, match=r"^Couldn't copy \d+ files, the first .+: \[Errno 28\] No space left on device$"
+    ):
+        copy_home(home, tmp_path / "new-home")
+
+    assert not (tmp_path / "new-home").exists()
+
+
 def test_a_refresh_can_run_again_after_a_copy_fails(home: AppPaths, tmp_path: Path) -> None:
     (tmp_path / "taken").mkdir()
     (tmp_path / "taken" / "x").touch()

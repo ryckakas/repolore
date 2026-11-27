@@ -50,10 +50,7 @@ def copy_home(paths: AppPaths, target: Path) -> Copied:
         try:
             target.mkdir(parents=True, exist_ok=True)
             if paths.data_dir.is_dir():
-                left_behind = partial(_left_behind, paths.data_dir)
-                shutil.copytree(
-                    paths.data_dir, target, ignore=left_behind, copy_function=counter.copy, dirs_exist_ok=True
-                )
+                _copy_data(paths.data_dir, target, counter)
             _copy_setting(paths.config_file, target / CONFIG_FILENAME, counter)
             _copy_setting(paths.questions_file, target / EVALS_FOLDER / QUESTIONS_FILENAME, counter)
         except BaseException:
@@ -76,6 +73,36 @@ def _refreshes_held(data_dir: Path) -> AbstractContextManager[None]:
     return no_refresh(data_dir) if data_dir.is_dir() else nullcontext()
 
 
+class _Counter:
+    def __init__(self) -> None:
+        self.files = 0
+        self.cloned = 0
+
+    def copy(self, source: str, target: str) -> str:
+        if source.endswith(DATABASE_SUFFIX):
+            back_up(Path(source), Path(target))
+        elif clone_or_copy(Path(source), Path(target)):
+            self.cloned += 1
+        self.files += 1
+        return target
+
+
+def _copy_data(data_dir: Path, target: Path, counter: _Counter) -> None:
+    left_behind = partial(_left_behind, data_dir)
+    try:
+        shutil.copytree(data_dir, target, ignore=left_behind, copy_function=counter.copy, dirs_exist_ok=True)
+    except shutil.Error as error:
+        raise CopyError(_failures(error)) from error
+
+
+def _failures(error: shutil.Error) -> str:
+    """copytree goes on past a file it can't copy and raises them all at the end, one per file on a full disk."""
+    failures: list[tuple[str, str, str]] = error.args[0]
+    source, _, reason = failures[0]
+    count = f"{len(failures)} file{'' if len(failures) == 1 else 's'}"
+    return f"Couldn't copy {count}, the first {source}: {reason}"
+
+
 def _left_behind(data_dir: Path, folder: str, names: list[str]) -> set[str]:
     """What copytree skips in a folder; the settings too, which come from where they're read, not the data dir."""
     here = Path(folder)
@@ -89,20 +116,6 @@ def _left_behind(data_dir: Path, folder: str, names: list[str]) -> set[str]:
 
 def _matches(name: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
-
-
-class _Counter:
-    def __init__(self) -> None:
-        self.files = 0
-        self.cloned = 0
-
-    def copy(self, source: str, target: str) -> str:
-        if source.endswith(DATABASE_SUFFIX):
-            back_up(Path(source), Path(target))
-        elif clone_or_copy(Path(source), Path(target)):
-            self.cloned += 1
-        self.files += 1
-        return target
 
 
 def _copy_setting(source: Path, target: Path, counter: _Counter) -> None:
