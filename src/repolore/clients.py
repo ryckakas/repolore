@@ -10,7 +10,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from repolore.config_files import ConfigFileError, add_entry, parse_jsonc
-from repolore.paths import HOME_ENV
+from repolore.paths import HOME_ENV, child_environment
 
 SERVER = "repolore"
 RELAY = "repolore-mcp"
@@ -376,7 +376,9 @@ def _claude_desktop_folder() -> Path:
 
 
 def _claude_desktop_entry() -> dict[str, Any]:
-    return {"command": _relay_path(), "args": [], "env": {name: os.environ[name] for name in _passed_on(NOT_SECRET)}}
+    # Values, not references, so a relative REPOLORE_HOME goes in absolute: the app starts the relay in its own folder.
+    environment = child_environment()
+    return {"command": _relay_path(), "args": [], "env": {name: environment[name] for name in _passed_on(NOT_SECRET)}}
 
 
 def _cursor_entry() -> dict[str, Any]:

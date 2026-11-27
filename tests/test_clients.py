@@ -35,6 +35,7 @@ from repolore.clients import (
     repolore_entries,
 )
 from repolore.config_files import parse_jsonc
+from repolore.paths import HOME_ENV
 
 CLAUDE_HEALTHY = """repolore:
   Scope: User config (available in all your projects)
@@ -687,6 +688,16 @@ def test_claude_desktop_never_gets_the_token_but_gets_what_isnt_secret(
 
     assert env == {"REPOLORE_DEVICE": "cpu", "XDG_DATA_HOME": "/data"}
     assert b"secret-token" not in machine.path(f".config/Claude/{DESKTOP_FILE}").read_bytes()
+
+
+def test_claude_desktop_gets_a_relative_home_as_an_absolute_path(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(HOME_ENV, "repolore-home")
+
+    env = added_entry(CLAUDE_DESKTOP, "mcpServers")["env"]
+
+    assert env == {HOME_ENV: str(machine.project.resolve() / "repolore-home")}
 
 
 def test_cursor_gets_references_to_the_variables_that_are_set(
