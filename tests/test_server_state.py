@@ -14,6 +14,7 @@ from repolore.server_state import (
     read_discovery,
     registered,
     request_stop,
+    server_status,
     write_discovery,
 )
 
@@ -114,3 +115,44 @@ def test_many_relays_count_and_dead_ones_are_cleared(tmp_path: Path) -> None:
     finally:
         for lock in held:
             lock.release()
+
+
+def test_a_stopped_server_has_no_address_but_counts_the_sessions_that_would_start_it(tmp_path: Path) -> None:
+    files = ServerFiles(tmp_path, "default")
+    write_discovery(files, DISCOVERY)
+
+    with registered(files):
+        status = server_status(files)
+
+    assert status.model_dump() == {
+        "running": False,
+        "starting": False,
+        "pid": None,
+        "url": None,
+        "version": None,
+        "started_at": None,
+        "model_ready": None,
+        "sessions": 1,
+    }
+
+
+def test_a_server_holding_its_lock_without_an_address_is_starting(tmp_path: Path) -> None:
+    files = ServerFiles(tmp_path, "default")
+
+    with hold(files.lock, timeout=0):
+        status = server_status(files)
+
+    assert (status.running, status.starting, status.pid) == (True, True, None)
+
+
+def test_a_running_server_says_where_and_which_version_but_not_its_token(tmp_path: Path) -> None:
+    files = ServerFiles(tmp_path, "default")
+    write_discovery(files, DISCOVERY.model_copy(update={"model_ready": True}))
+
+    with hold(files.lock, timeout=0):
+        status = server_status(files)
+
+    assert status.running and not status.starting
+    assert (status.pid, status.url, status.version) == (42, DISCOVERY.url, "1.2.3")
+    assert (status.started_at, status.model_ready, status.sessions) == (DISCOVERY.started_at, True, 0)
+    assert DISCOVERY.token not in status.model_dump_json()

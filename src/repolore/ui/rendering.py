@@ -7,6 +7,7 @@ from starlette.responses import Response
 from starlette.templating import Jinja2Templates
 
 from repolore import __version__
+from repolore.clients import managed_by
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
@@ -18,5 +19,8 @@ def form_text(form: FormData, name: str) -> str:
 
 def render(request: Request, db: str, template: str, status_code: int = 200, **context: Any) -> Response:
     return templates.TemplateResponse(
-        request, template, {"version": __version__, "db": db, **context}, status_code=status_code
+        request,
+        template,
+        {"version": __version__, "db": db, "managed_by": managed_by(), **context},
+        status_code=status_code,
     )

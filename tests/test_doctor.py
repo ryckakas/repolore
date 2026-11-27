@@ -11,18 +11,20 @@ from conftest import FakeEmbedder
 
 from repolore import __version__, doctor
 from repolore.chunking import Chunk
-from repolore.clients import PLUGIN_SERVER, Entry, McpClient, RegistrationError
+from repolore.clients import MANAGED_ENV, PLUGIN_SERVER, Entry, McpClient, RegistrationError
 from repolore.config import Config, LocalFolder
 from repolore.doctor import (
     Check,
     config_check,
     diagnose,
+    diagnosis,
     engine_check,
     github_access,
     github_check,
     index_check,
     local_documents_checks,
     model_check,
+    offline_github_check,
     refresh_check,
     registration_check,
     server_check,
@@ -802,3 +804,144 @@ def test_diagnose_reports_local_documents_right_after_the_config(data_paths: App
     names = [check.name for check in diagnose(data_paths, "default", github_answering(), clients=[])]
 
     assert names[names.index("repolore.toml") + 1] == "local/notes"
+
+
+def offline_github() -> Connect:
+    def refuse(_: str) -> GitHubClient:
+        raise AssertionError("asked GitHub while offline")
+
+    return refuse
+
+
+@pytest.mark.usefixtures("env_token")
+def test_offline_the_token_is_found_but_not_checked() -> None:
+    assert offline_github_check() == Check("GitHub", True, "a token from REPOLORE_GITHUB_TOKEN, not checked offline")
+
+
+def test_offline_no_token_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(github.TOKEN_ENV, raising=False)
+    monkeypatch.setattr(doctor, "resolve_token", lambda: (_ for _ in ()).throw(GitHubError("No GitHub token.")))
+
+    assert offline_github_check() == Check("GitHub", False, "No GitHub token.")
+
+
+def refusing_health(_: str) -> str:
+    raise AssertionError("checked the connection, which starts the shared server")
+
+
+@pytest.mark.usefixtures("env_token")
+def test_offline_diagnose_neither_asks_github_nor_checks_a_connection(data_paths: AppPaths) -> None:
+    clients = [client_with(USER_ENTRY, health=refusing_health)]
+
+    checks = list(diagnose(data_paths, "default", offline_github(), clients=clients, offline=True))
+
+    assert checks[1].detail.endswith("not checked offline")
+    assert checks[-1] == Check("Codex", True, "repolore is registered, connection not checked")
+
+
+@pytest.fixture
+def managed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(MANAGED_ENV, "Swarmed")
+
+
+@pytest.mark.usefixtures("managed")
+def test_a_managed_setup_fails_on_a_registration_and_says_how_to_remove_it() -> None:
+    check = registration_check(client_with(USER_ENTRY, health=refusing_health), manager="Swarmed")
+
+    assert check == Check(
+        "Codex",
+        False,
+        "repolore is registered: repolore (user)",
+        "Swarmed already gives repolore to its sessions; remove this one: `remove user`",
+    )
+
+
+def test_a_managed_setup_fails_on_every_registration_even_one_for_this_project_only() -> None:
+    project = Entry("repolore", ("repolore-mcp",), "project", "`remove project`", for_every_project=False)
+
+    check = registration_check(client_with(PLUGIN_ENTRY, project), manager="Swarmed")
+
+    assert check is not None
+    assert not check.ok
+    assert check.detail == "repolore is registered: plugin:repolore:repolore (plugin), repolore (project)"
+    assert (
+        check.fix == "Swarmed already gives repolore to its sessions; remove these: `remove plugin`; `remove project`"
+    )
+
+
+def test_a_managed_setup_doesnt_warn_about_a_client_without_repolore() -> None:
+    check = registration_check(client_with(), manager="Swarmed")
+
+    assert check == Check("Codex", True, "repolore isn't registered; Swarmed gives it to its sessions")
+
+
+def test_a_managed_setup_still_fails_on_a_listing_it_cant_read() -> None:
+    def unreadable() -> list[Entry]:
+        raise RegistrationError("bad toml")
+
+    client = McpClient("codex", "Codex", lambda: True, unreadable, lambda: "added", "add it")
+
+    assert registration_check(client, manager="Swarmed") == Check(
+        "Codex", False, "can't list its MCP servers: bad toml"
+    )
+
+
+@pytest.mark.usefixtures("env_token", "managed")
+def test_diagnose_reads_the_managing_app_from_the_environment(data_paths: AppPaths) -> None:
+    checks = list(diagnose(data_paths, "default", github_answering(), clients=[client_with(USER_ENTRY)]))
+
+    assert checks[-1].fix is not None
+    assert checks[-1].fix.startswith("Swarmed already gives repolore")
+
+
+@pytest.mark.usefixtures("env_token")
+def test_the_diagnosis_holds_the_paths_every_check_the_server_and_every_registration(data_paths: AppPaths) -> None:
+    def unreadable() -> list[Entry]:
+        raise RegistrationError("bad json")
+
+    clients = [
+        client_with(USER_ENTRY, PLUGIN_ENTRY, health=refusing_health),
+        McpClient("cursor", "Cursor", lambda: True, unreadable, lambda: "added", "add it"),
+        McpClient("zed", "Zed", lambda: False, never, lambda: "added", "add it"),
+    ]
+
+    found = diagnosis(data_paths, "default", offline_github(), clients, offline=True)
+
+    assert (found.version, found.db, found.managed_by, found.paths) == (__version__, "default", None, data_paths)
+    assert not found.ok
+    assert [check.name for check in found.checks][-2:] == ["Codex", "Cursor"]
+    assert found.server.running is False
+    assert [registration.model_dump() for registration in found.registrations] == [
+        {
+            "client": "codex",
+            "client_name": "Codex",
+            "name": "repolore",
+            "command": ["repolore-mcp"],
+            "scope": "user",
+            "for_every_project": True,
+            "remove": "`remove user`",
+        },
+        {
+            "client": "codex",
+            "client_name": "Codex",
+            "name": PLUGIN_SERVER,
+            "command": ["repolore-mcp"],
+            "scope": "plugin",
+            "for_every_project": True,
+            "remove": "`remove plugin`",
+        },
+    ]
+
+
+@pytest.mark.usefixtures("env_token", "managed")
+def test_a_diagnosis_names_the_managing_app_and_is_ok_only_when_every_check_is(
+    data_paths: AppPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doctor, "model_check", lambda *_: Check("model", True, "here"))
+
+    found = diagnosis(data_paths, "default", github_answering(), [client_with()])
+
+    assert found.managed_by == "Swarmed"
+    assert found.ok
+    assert found.checks[-1] == Check("Codex", True, "repolore isn't registered; Swarmed gives it to its sessions")
+    assert found.registrations == []

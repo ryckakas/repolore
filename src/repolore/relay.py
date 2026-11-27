@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -20,7 +19,7 @@ from mcp.types.version import LATEST_MODERN_VERSION
 
 from repolore import DIST, __version__
 from repolore.instructions import INSTRUCTIONS
-from repolore.paths import resolve_paths
+from repolore.paths import child_environment, resolve_paths
 from repolore.processes import SAFE_PATH, spawn_detached
 from repolore.server_state import Discovery, ServerFiles, is_running, read_discovery, registered, request_stop
 
@@ -44,7 +43,7 @@ def start_server(files: ServerFiles) -> None:
     command = [sys.executable, *SAFE_PATH, "-m", "repolore", "--data-dir", str(files.data_dir), "server", "run"]
     # Appended to, so a second server started in the same moment, which exits at once, can't cut the first one's log.
     with files.log.open("a", encoding="utf-8") as server_log:
-        spawn_detached([*command, "--db", files.db], stdout=server_log, env=os.environ, cwd=files.data_dir)
+        spawn_detached([*command, "--db", files.db], stdout=server_log, env=child_environment(), cwd=files.data_dir)
 
 
 def installed_version() -> str:

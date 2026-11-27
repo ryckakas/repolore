@@ -10,6 +10,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from repolore.config_files import ConfigFileError, add_entry, parse_jsonc
+from repolore.paths import HOME_ENV
 
 SERVER = "repolore"
 RELAY = "repolore-mcp"
@@ -23,10 +24,11 @@ command = "{RELAY}"
 startup_timeout_sec = 60
 tool_timeout_sec = 300
 """
-NOT_SECRET = ("REPOLORE_DEVICE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
+NOT_SECRET = ("REPOLORE_DEVICE", HOME_ENV, "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
 PASSED_ON = ("REPOLORE_GITHUB_TOKEN", "HTTPS_PROXY", *NOT_SECRET)
 TOOL_SECONDS = 300
 MCP_SERVERS = ("mcpServers",)
+MANAGED_ENV = "REPOLORE_MANAGED_BY"
 
 
 class RegistrationError(Exception):
@@ -69,6 +71,11 @@ class McpClient:
     add: Callable[[], str]
     register: str
     health: Callable[[str], str | None] | None = None
+
+
+def managed_by() -> str | None:
+    """The app that gives repolore to its own sessions, which makes a registration with any client a second setup."""
+    return os.environ.get(MANAGED_ENV, "").strip() or None
 
 
 def repolore_entries(client: McpClient) -> list[Entry]:

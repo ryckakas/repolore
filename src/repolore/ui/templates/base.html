@@ -11,7 +11,7 @@
 <body>
   <header>
     <h1>repolore</h1>
-    <p class="muted">{{ version }} · index {{ db }}</p>
+    <p class="muted">{{ version }} · index {{ db }}{% if managed_by %} · managed by {{ managed_by }}{% endif %}</p>
     <nav>
       {% for path, label in [("/", "Status"), ("/tools", "Tools"), ("/sources", "Sources"), ("/clients", "Clients")] %}
       <a href="{{ path }}"{% if request.url.path == path %} aria-current="page"{% endif %}>{{ label }}</a>

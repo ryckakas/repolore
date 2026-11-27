@@ -5,7 +5,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import Response
 
-from repolore.clients import CLIENTS, McpClient, RegistrationError, repolore_entries
+from repolore.clients import CLIENTS, McpClient, RegistrationError, managed_by, repolore_entries
 from repolore.doctor import CLIENT_ERRORS, Check, registration_check
 from repolore.instructions import INSTRUCTIONS
 from repolore.ui.rendering import render
@@ -43,8 +43,9 @@ class ClientPages:
     def _fragment(self, request: Request, status_code: int = 200, **context: Any) -> Response:
         rows: list[ClientRow] = []
         missing: list[str] = []
+        manager = managed_by()
         for client in CLIENTS:
-            row = _row(client)
+            row = _row(client, manager)
             if row is None:
                 missing.append(client.name)
             else:
@@ -52,9 +53,9 @@ class ClientPages:
         return render(request, self._db, "_clients.html", status_code, rows=rows, missing=missing, **context)
 
 
-def _row(client: McpClient) -> ClientRow | None:
+def _row(client: McpClient, manager: str | None) -> ClientRow | None:
     # Not the connection: asking Claude Code about it starts the shared server, and so the model.
-    check = registration_check(client, connection=False)
+    check = registration_check(client, connection=False, manager=manager)
     if check is None:
         return None
     if check.warning:
@@ -63,6 +64,8 @@ def _row(client: McpClient) -> ClientRow | None:
 
 
 def _registered(key: str) -> str:
+    if manager := managed_by():
+        raise RegistrationError(f"{manager} gives repolore to its sessions, so no client here should have it.")
     # The key only picks a row of the table, so a request can't make the page run or write anything else.
     client = next((client for client in CLIENTS if client.key == key and client.present()), None)
     if client is None:

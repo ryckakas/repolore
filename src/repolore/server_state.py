@@ -56,8 +56,41 @@ class ServerFiles:
         return self.clients / f"{pid}.lock"
 
 
+class ServerStatus(BaseModel):
+    """The shared server as another program reads it; never its token."""
+
+    running: bool
+    starting: bool = False
+    pid: int | None = None
+    url: str | None = None
+    version: str | None = None
+    started_at: str | None = None
+    model_ready: bool | None = None
+    sessions: int = 0
+
+
 def is_running(files: ServerFiles) -> bool:
     return is_locked(files.lock)
+
+
+def server_status(files: ServerFiles) -> ServerStatus:
+    """Whether the server runs and, once it has written its address, where; sessions count even while it's stopped,
+    because each one starts it again at its next search."""
+    sessions = connected_relays(files)
+    if not is_running(files):
+        return ServerStatus(running=False, sessions=sessions)
+    found = read_discovery(files)
+    if found is None:
+        return ServerStatus(running=True, starting=True, sessions=sessions)
+    return ServerStatus(
+        running=True,
+        pid=found.pid,
+        url=found.url,
+        version=found.version,
+        started_at=found.started_at,
+        model_ready=found.model_ready,
+        sessions=sessions,
+    )
 
 
 def read_discovery(files: ServerFiles) -> Discovery | None:

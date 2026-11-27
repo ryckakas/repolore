@@ -9,6 +9,7 @@ import pytest
 
 from repolore import locks, refresh
 from repolore.locks import REPLACE_ATTEMPTS
+from repolore.paths import HOME_ENV
 from repolore.processes import SpawnError
 from repolore.progress import Phase, Progress
 from repolore.refresh import (
@@ -19,6 +20,7 @@ from repolore.refresh import (
     STATUS_FILE,
     RefreshRunning,
     RefreshStatus,
+    no_refresh,
     refresh_due,
     refresh_status,
     refreshing,
@@ -351,3 +353,41 @@ def test_a_failed_refresh_also_waits_for_the_interval(tmp_path: Path) -> None:
     last_refresh(tmp_path, timedelta(minutes=5), ok=False)
 
     assert not refresh_due(tmp_path, index_file, hours=0.5)
+
+
+def test_a_refresh_started_with_a_relative_home_gets_it_absolute(
+    tmp_path: Path, spawned: Spawned, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(HOME_ENV, "home")
+
+    assert start_refresh(tmp_path / "home", "default")
+
+    [(_, _, env, _)] = spawned
+    assert env[HOME_ENV] == str(tmp_path.resolve() / "home")
+
+
+def test_no_refresh_runs_or_starts_while_it_is_held(tmp_path: Path, spawned: Spawned) -> None:
+    with no_refresh(tmp_path):
+        assert not start_refresh(tmp_path, "default")
+        with pytest.raises(RefreshRunning), refreshing(tmp_path):
+            pass
+
+    assert spawned == []
+    assert not (tmp_path / STATUS_FILE).exists()
+    with refreshing(tmp_path):
+        pass
+
+
+def test_holding_off_refreshes_is_refused_while_one_runs(tmp_path: Path) -> None:
+    with refreshing(tmp_path), pytest.raises(RefreshRunning, match="running"), no_refresh(tmp_path):
+        pass
+
+
+def test_holding_off_refreshes_is_refused_while_one_starts(tmp_path: Path) -> None:
+    (tmp_path / REQUEST_FILE).touch()
+
+    with pytest.raises(RefreshRunning, match="starting"), no_refresh(tmp_path):
+        pass
+
+    assert (tmp_path / REQUEST_FILE).exists()
