@@ -27,3 +27,8 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    groups:
+      # Dependabot sees CodeQL's init and analyze as two dependencies, and CodeQL refuses to run
+      # when they are at different versions, so a bump of either alone fails its checks.
+      codeql-action:
+        patterns: ["github/codeql-action*"]
