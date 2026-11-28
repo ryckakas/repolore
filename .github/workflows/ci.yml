@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
       # An exact release: new audits arrive with a deliberate bump, not with an unrelated pull
       # request.
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+      - uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: zizmor@1.31.1
       # The token lets zizmor check that every pinned commit belongs to its action's repository.
@@ -118,7 +118,7 @@ jobs:
           persist-credentials: false
       # actionlint skips the `run:` blocks without a word when shellcheck is missing, so it is
       # installed first, at an exact release.
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+      - uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: shellcheck@0.11.0
       # The release binary, checked against its published SHA-256. Dependabot doesn't see this
